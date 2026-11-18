@@ -13,7 +13,9 @@ use windows::Win32::Storage::FileSystem::FILE_FLAGS_AND_ATTRIBUTES;
 use windows::Win32::UI::Shell::{
     SHGetFileInfoW, SHFILEINFOW, SHGFI_ICON, SHGFI_LARGEICON,
 };
-use windows::Win32::UI::WindowsAndMessaging::{DestroyIcon, GetIconInfo, HICON, ICONINFO};
+use windows::Win32::UI::WindowsAndMessaging::{
+    DestroyIcon, GetIconInfo, PrivateExtractIconsW, HICON, ICONINFO,
+};
 
 use crate::core::startup::{exe_path, expand_env};
 use crate::ui::theme;
@@ -162,52 +164,90 @@ unsafe fn hicon_to_image(hicon: HICON) -> Option<Arc<RenderImage>> {
     Some(Arc::new(RenderImage::new(vec![Frame::new(buf)])))
 }
 
-fn extract(path: &PathBuf) -> Option<Arc<RenderImage>> {
-    unsafe {
-        let mut shfi = SHFILEINFOW::default();
-        let r = SHGetFileInfoW(
-            PCWSTR(wide(&path.to_string_lossy()).as_ptr()),
-            FILE_FLAGS_AND_ATTRIBUTES(0),
-            Some(&mut shfi),
-            std::mem::size_of::<SHFILEINFOW>() as u32,
-            SHGFI_ICON | SHGFI_LARGEICON,
-        );
-        if r == 0 || shfi.hIcon.is_invalid() {
-            return None;
+fn parse_icon_spec(raw: &str) -> (String, i32) {
+    let t = raw.trim();
+    let (base, rest) = if let Some(rest) = t.strip_prefix('"') {
+        match rest.split_once('"') {
+            Some((p, r)) => (p.to_string(), r),
+            None => (rest.to_string(), ""),
         }
-        let img = hicon_to_image(shfi.hIcon);
-        let _ = DestroyIcon(shfi.hIcon);
+    } else {
+        match t.rsplit_once(',') {
+            Some((p, s)) if s.trim().parse::<i32>().is_ok() => (p.to_string(), s),
+            _ => (t.to_string(), ""),
+        }
+    };
+    let idx = rest
+        .trim()
+        .trim_start_matches(',')
+        .trim()
+        .parse::<i32>()
+        .unwrap_or(0);
+    (base, idx)
+}
+
+unsafe fn extract_hicon(path: &PathBuf, index: i32) -> Option<HICON> {
+    let w = wide(&path.to_string_lossy());
+    if w.len() <= 260 {
+        let mut buf = [0u16; 260];
+        buf[..w.len()].copy_from_slice(&w);
+        let mut icons = [HICON::default(); 1];
+        let n = PrivateExtractIconsW(&buf, index, 48, 48, Some(&mut icons), None, 0);
+        if n >= 1 && !icons[0].is_invalid() {
+            return Some(icons[0]);
+        }
+    }
+    let mut shfi = SHFILEINFOW::default();
+    let r = SHGetFileInfoW(
+        PCWSTR(w.as_ptr()),
+        FILE_FLAGS_AND_ATTRIBUTES(0),
+        Some(&mut shfi),
+        std::mem::size_of::<SHFILEINFOW>() as u32,
+        SHGFI_ICON | SHGFI_LARGEICON,
+    );
+    if r == 0 || shfi.hIcon.is_invalid() {
+        return None;
+    }
+    Some(shfi.hIcon)
+}
+
+fn extract(path: &PathBuf, index: i32) -> Option<Arc<RenderImage>> {
+    unsafe {
+        let hicon = extract_hicon(path, index)?;
+        let img = hicon_to_image(hicon);
+        let _ = DestroyIcon(hicon);
         img
     }
 }
 
-fn lookup(path: PathBuf) -> Option<Arc<RenderImage>> {
-    let key = path.to_string_lossy().to_lowercase();
+fn lookup(path: PathBuf, index: i32) -> Option<Arc<RenderImage>> {
+    let key = format!("{}#{index}", path.to_string_lossy().to_lowercase());
     let mut map = cache().lock().ok()?;
     if let Some(v) = map.get(&key) {
         return v.clone();
     }
-    let v = extract(&path);
+    let v = extract(&path, index);
     map.insert(key, v.clone());
     v
 }
 
 pub fn for_command(command: &str) -> Option<Arc<RenderImage>> {
-    lookup(exe_path(command)?)
+    lookup(exe_path(command)?, 0)
 }
 
 pub fn for_binary(raw: &str) -> Option<Arc<RenderImage>> {
-    lookup(normalize_binary(raw)?)
+    let (base, idx) = parse_icon_spec(raw);
+    lookup(normalize_binary(&base)?, idx)
 }
 
 pub fn icon_or_placeholder(icon: &Option<Arc<RenderImage>>) -> AnyElement {
     match icon {
         Some(im) => img(im.clone())
-            .size(px(28.))
+            .size(px(32.))
             .flex_none()
             .into_any_element(),
         None => div()
-            .size(px(28.))
+            .size(px(32.))
             .flex_none()
             .rounded_md()
             .bg(theme::track())

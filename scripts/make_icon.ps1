@@ -2,7 +2,7 @@ param(
   [int]$Size = 256,
   [string]$Out = "icon.png"
 )
-# MWCleaner icon single source: "sweep to shine" — broom sweep + sparkle on navy->blue->cyan tile.
+# MWCleaner icon single source: "sweep to shine" — broom + sparkle, flat tile in app accent blues.
 Add-Type -AssemblyName System.Drawing
 
 function New-RoundRect([float]$x, [float]$y, [float]$w, [float]$h, [float]$r) {
@@ -49,11 +49,10 @@ $small = $Size -le 24
 $tile = New-RoundRect 0 0 256 256 58
 $blend = New-Object System.Drawing.Drawing2D.ColorBlend
 $blend.Colors = @(
-  [System.Drawing.Color]::FromArgb(255, 13, 27, 58),
   [System.Drawing.Color]::FromArgb(255, 47, 111, 235),
-  [System.Drawing.Color]::FromArgb(255, 53, 200, 220)
+  [System.Drawing.Color]::FromArgb(255, 91, 157, 255)
 )
-$blend.Positions = @([float]0.0, [float]0.55, [float]1.0)
+$blend.Positions = @([float]0.0, [float]1.0)
 $tileBrush = New-Object System.Drawing.Drawing2D.LinearGradientBrush(
   (New-Object System.Drawing.RectangleF(0, 0, 256, 256)),
   [System.Drawing.Color]::White, [System.Drawing.Color]::White,
@@ -63,24 +62,9 @@ $g.FillPath($tileBrush, $tile)
 
 $g.SetClip($tile)
 
-# top gloss (blend spans full tile so no wrap seam)
-$glossBlend = New-Object System.Drawing.Drawing2D.ColorBlend
-$glossBlend.Colors = @(
-  [System.Drawing.Color]::FromArgb(30, 255, 255, 255),
-  [System.Drawing.Color]::FromArgb(0, 255, 255, 255),
-  [System.Drawing.Color]::FromArgb(0, 255, 255, 255)
-)
-$glossBlend.Positions = @([float]0.0, [float]0.58, [float]1.0)
-$glossBrush = New-Object System.Drawing.Drawing2D.LinearGradientBrush(
-  (New-Object System.Drawing.RectangleF(0, 0, 256, 256)),
-  [System.Drawing.Color]::White, [System.Drawing.Color]::White,
-  [System.Drawing.Drawing2D.LinearGradientMode]::Vertical)
-$glossBrush.InterpolationColors = $glossBlend
-$g.FillRectangle($glossBrush, 0, 0, 256, 256)
-
 # sweep trail (large sizes only)
 if ($full) {
-  $pen = New-Object System.Drawing.Pen([System.Drawing.Color]::FromArgb(235, 103, 232, 249), 11)
+  $pen = New-Object System.Drawing.Pen([System.Drawing.Color]::FromArgb(235, 116, 173, 255), 11)
   $pen.StartCap = [System.Drawing.Drawing2D.LineCap]::Round
   $pen.EndCap = [System.Drawing.Drawing2D.LineCap]::Round
   $g.DrawBezier($pen, 40, 190, 80, 228, 150, 232, 206, 206)
@@ -88,9 +72,9 @@ if ($full) {
   $pen2.StartCap = [System.Drawing.Drawing2D.LineCap]::Round
   $pen2.EndCap = [System.Drawing.Drawing2D.LineCap]::Round
   $g.DrawBezier($pen2, 58, 196, 92, 220, 140, 222, 182, 206)
-  $g.FillEllipse((New-Object System.Drawing.SolidBrush([System.Drawing.Color]::FromArgb(200, 103, 232, 249))), 29, 163, 10, 10)
+  $g.FillEllipse((New-Object System.Drawing.SolidBrush([System.Drawing.Color]::FromArgb(200, 116, 173, 255))), 29, 163, 10, 10)
   $g.FillEllipse((New-Object System.Drawing.SolidBrush([System.Drawing.Color]::FromArgb(150, 255, 255, 255))), 22, 142, 7, 7)
-  $g.FillEllipse((New-Object System.Drawing.SolidBrush([System.Drawing.Color]::FromArgb(180, 126, 231, 135))), 41, 137, 5, 5)
+  $g.FillEllipse((New-Object System.Drawing.SolidBrush([System.Drawing.Color]::FromArgb(180, 227, 237, 253))), 41, 137, 5, 5)
 }
 
 # broom, rotated 35deg clockwise: handle top-right, head bottom-left
@@ -108,7 +92,7 @@ $g.DrawLine($handlePen, 128, 52, 128, 112)
 
 if (-not $small) {
   $ferrule = New-RoundRect 111 106 34 17 7
-  $g.FillPath((New-Object System.Drawing.SolidBrush([System.Drawing.Color]::FromArgb(255, 234, 246, 255))), $ferrule)
+  $g.FillPath((New-Object System.Drawing.SolidBrush([System.Drawing.Color]::FromArgb(255, 227, 237, 253))), $ferrule)
 }
 
 $bristles = New-Object System.Drawing.Drawing2D.GraphicsPath
@@ -127,8 +111,7 @@ $bristles.CloseFigure()
 if ($small) {
   $g.FillPath((New-Object System.Drawing.SolidBrush([System.Drawing.Color]::FromArgb(255, 255, 255, 255))), $bristles)
 } else {
-  $brEnd = [System.Drawing.Color]::FromArgb(255, 56, 189, 248)
-  if (-not $full) { $brEnd = [System.Drawing.Color]::FromArgb(255, 186, 230, 253) }
+  $brEnd = [System.Drawing.Color]::FromArgb(255, 227, 237, 253)
   $brBrush = New-Object System.Drawing.Drawing2D.LinearGradientBrush(
     (New-Object System.Drawing.RectangleF(96, 121, 64, 80)),
     [System.Drawing.Color]::FromArgb(255, 255, 255, 255),
@@ -140,7 +123,7 @@ if ($small) {
 if ($mid) {
   $nw = 4.0
   if (-not $full) { $nw = 6.0 }
-  $notchPen = New-Object System.Drawing.Pen([System.Drawing.Color]::FromArgb(110, 13, 27, 58), $nw)
+  $notchPen = New-Object System.Drawing.Pen([System.Drawing.Color]::FromArgb(110, 47, 111, 235), $nw)
   $notchPen.StartCap = [System.Drawing.Drawing2D.LineCap]::Round
   $notchPen.EndCap = [System.Drawing.Drawing2D.LineCap]::Round
   $g.DrawLine($notchPen, 116, 162, 110, 194)
@@ -154,12 +137,12 @@ $sparkR = 28.0
 if ($small) { $sparkR = 36.0 }
 $spark = New-Sparkle 58 58 $sparkR
 if ($small) {
-  $g.FillPath((New-Object System.Drawing.SolidBrush([System.Drawing.Color]::FromArgb(255, 126, 231, 135))), $spark)
+  $g.FillPath((New-Object System.Drawing.SolidBrush([System.Drawing.Color]::FromArgb(255, 227, 237, 253))), $spark)
 } else {
   $sparkBrush = New-Object System.Drawing.Drawing2D.LinearGradientBrush(
     (New-Object System.Drawing.RectangleF(30, 30, 56, 56)),
-    [System.Drawing.Color]::FromArgb(255, 126, 231, 135),
-    [System.Drawing.Color]::FromArgb(255, 53, 200, 220),
+    [System.Drawing.Color]::FromArgb(255, 255, 255, 255),
+    [System.Drawing.Color]::FromArgb(255, 227, 237, 253),
     [System.Drawing.Drawing2D.LinearGradientMode]::ForwardDiagonal)
   $g.FillPath($sparkBrush, $spark)
 }
