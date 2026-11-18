@@ -284,7 +284,7 @@ fn wide_list(paths: &[PathBuf]) -> Vec<u16> {
     v
 }
 
-unsafe fn recycle_paths(paths: &[PathBuf]) -> bool {
+pub(crate) unsafe fn recycle_paths(paths: &[PathBuf]) -> bool {
     if paths.is_empty() {
         return true;
     }

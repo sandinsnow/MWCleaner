@@ -57,16 +57,21 @@ fn pair(dark: u32, light: u32) -> Rgba {
     rgb(if is_light() { light } else { dark })
 }
 
-pub fn bg() -> Rgba { pair(0x17181c, 0xf5f6f8) }
-pub fn panel() -> Rgba { pair(0x202128, 0xffffff) }
-pub fn panel_hover() -> Rgba { pair(0x2a2b34, 0xeceef2) }
-pub fn border() -> Rgba { pair(0x33343e, 0xd8dbe1) }
-pub fn text() -> Rgba { pair(0xe8e8ec, 0x1f2328) }
-pub fn muted() -> Rgba { pair(0x9a9ca6, 0x697077) }
-pub fn accent() -> Rgba { pair(0x4f8cff, 0x2f6feb) }
-pub fn accent_hover() -> Rgba { pair(0x6ba1ff, 0x4f8cff) }
-pub fn danger() -> Rgba { pair(0xe5534b, 0xcf222e) }
-pub fn danger_hover() -> Rgba { pair(0xf06a62, 0xa40e26) }
-pub fn success() -> Rgba { pair(0x3fb950, 0x1a7f37) }
-pub fn track() -> Rgba { pair(0x2c2d36, 0xe6e8ec) }
-pub fn warning() -> Rgba { pair(0xd29922, 0x9a6700) }
+pub fn bg() -> Rgba { pair(0x13151a, 0xf3f5f8) }
+pub fn panel() -> Rgba { pair(0x1c1f26, 0xffffff) }
+pub fn panel_hover() -> Rgba { pair(0x262a33, 0xeef1f5) }
+pub fn border() -> Rgba { pair(0x2e333e, 0xdde1e8) }
+pub fn text() -> Rgba { pair(0xe6e8ee, 0x1c2128) }
+pub fn muted() -> Rgba { pair(0x8b91a0, 0x626b76) }
+pub fn accent() -> Rgba { pair(0x5b9dff, 0x2f6feb) }
+pub fn accent_hover() -> Rgba { pair(0x74adff, 0x4f8cff) }
+pub fn danger() -> Rgba { pair(0xf0615c, 0xcf222e) }
+pub fn danger_hover() -> Rgba { pair(0xf77b76, 0xa40e26) }
+pub fn success() -> Rgba { pair(0x43c95f, 0x1a7f37) }
+pub fn track() -> Rgba { pair(0x262a33, 0xe6e9ee) }
+pub fn warning() -> Rgba { pair(0xdba32c, 0x9a6700) }
+
+pub fn accent_soft() -> Rgba { pair(0x24344d, 0xe3edfd) }
+pub fn danger_soft() -> Rgba { pair(0x3d2426, 0xfde7e9) }
+pub fn success_soft() -> Rgba { pair(0x1f3327, 0xe2f4e8) }
+pub fn warning_soft() -> Rgba { pair(0x3a3120, 0xfbf0d9) }

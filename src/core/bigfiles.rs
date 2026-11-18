@@ -4,13 +4,14 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use windows::core::PCWSTR;
 use windows::Win32::Storage::FileSystem::{
-    GetDiskFreeSpaceExW, GetDriveTypeW, GetLogicalDrives,
+    GetDiskFreeSpaceExW, GetDriveTypeW, GetLogicalDrives, GetVolumeInformationW,
 };
 
 use super::is_reparse;
 
 pub struct DriveInfo {
     pub letter: String,
+    pub label: String,
     pub total: u64,
     pub free: u64,
 }
@@ -30,6 +31,8 @@ pub fn drives() -> Vec<DriveInfo> {
         }
         let mut total = 0u64;
         let mut free = 0u64;
+        let mut vol = [0u16; 256];
+        let mut label = String::new();
         unsafe {
             let _ = GetDiskFreeSpaceExW(
                 PCWSTR(wide.as_ptr()),
@@ -37,8 +40,21 @@ pub fn drives() -> Vec<DriveInfo> {
                 Some(&mut total),
                 Some(&mut free),
             );
+            if GetVolumeInformationW(
+                PCWSTR(wide.as_ptr()),
+                Some(&mut vol),
+                None,
+                None,
+                None,
+                None,
+            )
+            .is_ok()
+            {
+                let end = vol.iter().position(|&c| c == 0).unwrap_or(vol.len());
+                label = String::from_utf16_lossy(&vol[..end]);
+            }
         }
-        result.push(DriveInfo { letter, total, free });
+        result.push(DriveInfo { letter, label, total, free });
     }
     result
 }

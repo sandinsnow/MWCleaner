@@ -111,27 +111,65 @@ impl BigFilesPage {
 
 impl Render for BigFilesPage {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let drive_buttons = self.drives.iter().map(|d| {
+        let drive_cards = self.drives.iter().map(|d| {
             let letter = d.letter.clone();
             let active = self.drive.as_deref() == Some(letter.as_str());
-            let label = format!("{} ({}/{})", letter.trim_end_matches('\\'), fmt_size(d.total - d.free), fmt_size(d.total));
+            let used = d.total.saturating_sub(d.free);
+            let frac = if d.total > 0 { used as f32 / d.total as f32 } else { 0. };
+            let pct = (frac * 100.0).round() as u32;
+            let vol_label = if d.label.is_empty() { "本地磁盘".to_string() } else { d.label.clone() };
+            let letter_disp = letter.trim_end_matches('\\').to_string();
             div()
                 .id(SharedString::from(format!("drive-{letter}")))
-                .px_3()
-                .py_1()
-                .rounded_md()
-                .text_size(px(13.))
+                .w(px(230.))
+                .p_3()
+                .rounded(px(10.))
+                .border_1()
                 .cursor_pointer()
-                .bg(if active { theme::accent() } else { theme::panel_hover() })
-                .text_color(if active { rgb(0xffffff) } else { theme::text() })
+                .flex()
+                .flex_col()
+                .gap_2()
+                .border_color(if active { theme::accent() } else { theme::border() })
+                .bg(if active { theme::accent_soft() } else { theme::panel() })
+                .hover(move |s| {
+                    s.border_color(theme::accent())
+                        .bg(if active { theme::accent_soft() } else { theme::panel_hover() })
+                })
                 .on_click(cx.listener(move |this, _, _, cx| {
                     this.drive = Some(letter.clone());
                     cx.notify();
                 }))
                 .child(
-                    div().flex().flex_col().gap_1()
-                        .child(label)
-                        .child(usage_bar((d.total - d.free) as f32 / d.total as f32)),
+                    div().flex().items_center().gap_2()
+                        .child(
+                            div().text_size(px(18.))
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .text_color(if active { theme::accent() } else { theme::text() })
+                                .child(letter_disp),
+                        )
+                        .child(
+                            div().flex_1().min_w_0()
+                                .text_size(px(12.))
+                                .text_color(theme::muted())
+                                .truncate()
+                                .child(vol_label),
+                        )
+                        .child(
+                            div().text_size(px(12.))
+                                .text_color(theme::muted())
+                                .child(format!("{pct}%")),
+                        ),
+                )
+                .child(usage_bar(frac))
+                .child(
+                    div().text_size(px(11.))
+                        .text_color(theme::muted())
+                        .child(format!("已用 {} / {}", fmt_size(used), fmt_size(d.total))),
+                )
+                .child(
+                    div().text_size(px(11.))
+                        .text_color(theme::muted())
+                        .child(format!("剩余 {}", fmt_size(d.free))),
                 )
         });
 
@@ -211,8 +249,8 @@ impl Render for BigFilesPage {
             .gap_4()
             .child(page_header("大文件分析", "找出占用空间最大的文件与文件夹"))
             .child(
-                div().flex().flex_wrap().gap_2().items_center()
-                    .children(drive_buttons)
+                div().flex().flex_wrap().gap_3().items_center()
+                    .children(drive_cards)
                     .child(
                         div()
                             .text_size(px(12.))

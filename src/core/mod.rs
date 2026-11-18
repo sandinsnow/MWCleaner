@@ -1,10 +1,10 @@
 pub mod bigfiles;
 pub mod junk;
-pub mod leftovers;
 pub mod registry;
 pub mod services;
 pub mod settings;
 pub mod startup;
+pub mod uninstall;
 
 use std::fs;
 use std::os::windows::fs::MetadataExt;

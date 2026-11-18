@@ -219,7 +219,11 @@ impl Render for ServicesPage {
                                         .text_size(px(11.))
                                         .px_1p5()
                                         .rounded(px(4.))
-                                        .bg(theme::track())
+                                        .bg(match adv.category {
+                                            services::AdviceCategory::Recommend => theme::accent_soft(),
+                                            services::AdviceCategory::Keep => theme::track(),
+                                            services::AdviceCategory::Caution => theme::danger_soft(),
+                                        })
                                         .text_color(match adv.category {
                                             services::AdviceCategory::Recommend => theme::accent(),
                                             services::AdviceCategory::Keep => theme::muted(),

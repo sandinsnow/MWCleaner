@@ -1,7 +1,7 @@
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 use winreg::enums::*;
 use winreg::types::FromRegValue;
@@ -230,11 +230,15 @@ fn write_backup(issues: &[RegIssue]) -> io::Result<PathBuf> {
     }
     let stamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
+        .map(|d| d.as_millis())
         .unwrap_or(0);
+    static SEQ: AtomicU32 = AtomicU32::new(0);
     let dir = app_data_dir().join("backups");
     fs::create_dir_all(&dir)?;
-    let path = dir.join(format!("registry-{stamp}.reg"));
+    let path = dir.join(format!(
+        "registry-{stamp}-{}.reg",
+        SEQ.fetch_add(1, Ordering::Relaxed)
+    ));
     let mut bytes: Vec<u8> = vec![0xFF, 0xFE];
     bytes.extend(text.encode_utf16().flat_map(|u| u.to_le_bytes()));
     fs::write(&path, bytes)?;

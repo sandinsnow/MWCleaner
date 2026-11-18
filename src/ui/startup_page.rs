@@ -94,7 +94,7 @@ impl Render for StartupPage {
                                         .text_size(px(11.))
                                         .px_1p5()
                                         .rounded(px(4.))
-                                        .bg(theme::track())
+                                        .bg(if enabled { theme::success_soft() } else { theme::track() })
                                         .text_color(if enabled { theme::success() } else { theme::muted() })
                                         .child(if enabled { "已启用" } else { "已禁用" }),
                                 ),
