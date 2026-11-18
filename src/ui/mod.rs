@@ -72,7 +72,7 @@ impl RootView {
 }
 
 impl Render for RootView {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let groups: [(&str, &[Page]); 3] = [
             ("清理", &[Page::Junk, Page::Registry, Page::BigFiles]),
             ("优化", &[Page::Startup, Page::Services]),
@@ -115,27 +115,128 @@ impl Render for RootView {
             Page::Settings => self.settings.clone().into_any_element(),
         };
 
+        let maximized = window.is_maximized();
+        let cap_base = || {
+            div()
+                .w(px(46.))
+                .h_full()
+                .flex()
+                .items_center()
+                .justify_center()
+                .flex_none()
+        };
+        let titlebar = div()
+            .flex()
+            .h(px(40.))
+            .flex_none()
+            .border_b_1()
+            .border_color(theme::border())
+            .child(
+                div()
+                    .w(px(208.))
+                    .flex_none()
+                    .h_full()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .px_4()
+                    .border_r_1()
+                    .border_color(theme::border())
+                    .children(brand_icon().map(|im| img(im).size(px(20.)).flex_none()))
+                    .child(
+                        div()
+                            .text_size(px(13.))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .child("MWCleaner"),
+                    ),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .h_full()
+                    .min_w_0()
+                    .flex()
+                    .items_center()
+                    .px_4()
+                    .window_control_area(WindowControlArea::Drag)
+                    .child(
+                        div()
+                            .text_size(px(12.))
+                            .text_color(theme::muted())
+                            .truncate()
+                            .child(self.page.label()),
+                    ),
+            )
+            .child(
+                cap_base()
+                    .window_control_area(WindowControlArea::Min)
+                    .hover(|s| s.bg(theme::panel_hover()))
+                    .child(div().w(px(10.)).h(px(1.)).bg(theme::text())),
+            )
+            .child(
+                cap_base()
+                    .window_control_area(WindowControlArea::Max)
+                    .hover(|s| s.bg(theme::panel_hover()))
+                    .child(if maximized {
+                        div()
+                            .relative()
+                            .w(px(11.))
+                            .h(px(11.))
+                            .child(
+                                div()
+                                    .absolute()
+                                    .top_0()
+                                    .right_0()
+                                    .w(px(8.))
+                                    .h(px(8.))
+                                    .border_t_1()
+                                    .border_r_1()
+                                    .border_color(theme::text()),
+                            )
+                            .child(
+                                div()
+                                    .absolute()
+                                    .bottom_0()
+                                    .left_0()
+                                    .w(px(8.))
+                                    .h(px(8.))
+                                    .border_1()
+                                    .border_color(theme::text()),
+                            )
+                            .into_any_element()
+                    } else {
+                        div()
+                            .w(px(10.))
+                            .h(px(10.))
+                            .border_1()
+                            .border_color(theme::text())
+                            .into_any_element()
+                    }),
+            )
+            .child(
+                cap_base()
+                    .window_control_area(WindowControlArea::Close)
+                    .hover(|s| s.bg(theme::danger_soft()))
+                    .child(div().text_size(px(16.)).child("×")),
+            );
+
         div().flex()
+            .flex_col()
             .size_full()
             .bg(theme::bg())
             .text_color(theme::text())
             .text_size(px(14.))
+            .child(titlebar)
+            .child(
+                div().flex().flex_1().min_h_0()
             .child(
                 div().flex().flex_col()
                     .w(px(208.))
                     .h_full()
                     .border_r_1()
                     .border_color(theme::border())
-                    .py_4()
-                    .child(
-                        div().flex().items_center().gap_2().px_4().pb_2()
-                            .children(brand_icon().map(|im| img(im).size(px(26.)).flex_none()))
-                            .child(
-                                div().text_size(px(16.))
-                                    .font_weight(FontWeight::SEMIBOLD)
-                                    .child("MWCleaner"),
-                            ),
-                    )
+                    .pb_4()
+                    .pt_1()
                     .children(groups.into_iter().map(|(label, pages)| {
                         div().flex().flex_col().gap_0p5().pt_2()
                             .child(
@@ -159,6 +260,7 @@ impl Render for RootView {
                     ),
             )
             .child(div().flex_1().h_full().min_w_0().child(content))
+            )
     }
 }
 

@@ -15,6 +15,7 @@ fn main() {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
                 titlebar: Some(TitlebarOptions {
                     title: Some("MWCleaner · Windows 清理与优化".into()),
+                    appears_transparent: true,
                     ..Default::default()
                 }),
                 ..Default::default()
