@@ -1,0 +1,90 @@
+# 便携单文件 exe 发布流水线（参照 MWMD release.yml，适配纯 Rust + gpui）
+# 触发：推送 v* 标签（如 v0.1.0）。产物：免安装单 exe + SHA256，发布到 GitHub Releases。
+# 与 MWMD 的差异：无前端（不走 pnpm/tauri）；cargo 产出后须用 Windows SDK 的 mt.exe
+# 注入 assets/app.manifest（requireAdministrator + Common-Controls v6），否则启动即崩。
+# 不做代码签名（未签名）；无自更新器，故不产出 latest.json。
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "要构建/发布的标签（如 v0.1.0）"
+        required: true
+
+permissions:
+  contents: write
+
+env:
+  # cargo 二进制名为 mwcleaner.exe，CI 重命名为 MWCleaner.exe
+  APP_NAME: MWCleaner
+  BIN_NAME: mwcleaner
+  TARGET: x86_64-pc-windows-msvc
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Resolve tag
+        id: tag
+        shell: bash
+        run: |
+          TAG="${{ github.event.inputs.tag }}"
+          [ -z "$TAG" ] && TAG="${GITHUB_REF#refs/tags/}"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ env.TARGET }}
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+
+      # .cargo/config.toml 已设 crt-static，产物为免依赖单文件
+      - name: Build release exe
+        run: cargo build --release --locked --target ${{ env.TARGET }}
+
+      - name: Stage + inject manifest + checksum
+        shell: bash
+        run: |
+          set -euo pipefail
+          OUT="dist-release"
+          mkdir -p "$OUT"
+          cp "target/${TARGET}/release/${BIN_NAME}.exe" "$OUT/${APP_NAME}.exe"
+
+          # 定位 Windows SDK 的 mt.exe（runner 预装，取最新版本目录）
+          MT=$(ls -d "/c/Program Files (x86)/Windows Kits/10/bin/"*/x64/mt.exe 2>/dev/null | sort -V | tail -n1)
+          if [ -z "$MT" ]; then echo "::error::mt.exe not found in Windows SDK"; exit 1; fi
+          echo "using $MT"
+
+          # 注入管理员 manifest（gpui 依赖 Common-Controls v6，必须保留）
+          "$MT" -nologo -manifest assets/app.manifest "-outputresource:$OUT/${APP_NAME}.exe;#1"
+
+          # 回读校验：requireAdministrator 与 Common-Controls 各命中一次，共 2
+          "$MT" -nologo "-inputresource:$OUT/${APP_NAME}.exe;#1" -out:"$OUT/readback.xml"
+          HITS=$(grep -c -E "requireAdministrator|Common-Controls" "$OUT/readback.xml")
+          if [ "$HITS" -ne 2 ]; then echo "::error::manifest readback check failed (hits=$HITS)"; exit 1; fi
+          rm "$OUT/readback.xml"
+
+          # SHA256（小写十六进制），用于完整性校验
+          SHA=$(sha256sum "$OUT/${APP_NAME}.exe" | awk '{print $1}')
+          echo "$SHA" > "$OUT/${APP_NAME}.exe.sha256"
+          ls -la "$OUT"
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.tag.outputs.tag }}
+          name: ${{ env.APP_NAME }} ${{ steps.tag.outputs.tag }}
+          generate_release_notes: true
+          files: |
+            dist-release/${{ env.APP_NAME }}.exe
+            dist-release/${{ env.APP_NAME }}.exe.sha256
