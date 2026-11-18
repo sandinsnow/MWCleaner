@@ -145,15 +145,16 @@ unsafe fn hicon_to_image(hicon: HICON) -> Option<Arc<RenderImage>> {
             } else if a > 0 && a < 255 {
                 // 图标位图为预乘 alpha，gpui 需要直 alpha
                 let un = |c: u8| ((c as u32 * 255) / a as u32).min(255) as u8;
-                rgba[i] = un(r);
+                // gpui Windows 表面按 BGRA 字节序取样
+                rgba[i] = un(b);
                 rgba[i + 1] = un(g);
-                rgba[i + 2] = un(b);
+                rgba[i + 2] = un(r);
                 rgba[i + 3] = a;
                 continue;
             }
-            rgba[i] = r;
+            rgba[i] = b;
             rgba[i + 1] = g;
-            rgba[i + 2] = b;
+            rgba[i + 2] = r;
             rgba[i + 3] = a;
         }
     }

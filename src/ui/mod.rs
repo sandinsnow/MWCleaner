@@ -155,7 +155,7 @@ impl Render for RootView {
                             .pb_1()
                             .text_size(px(11.))
                             .text_color(theme::muted())
-                            .child("v0.3.0 · 单文件版"),
+                            .child("v0.3.1 · 单文件版"),
                     ),
             )
             .child(div().flex_1().h_full().min_w_0().child(content))
@@ -166,7 +166,11 @@ fn brand_icon() -> Option<Arc<RenderImage>> {
     static ICON: OnceLock<Option<Arc<RenderImage>>> = OnceLock::new();
     ICON.get_or_init(|| {
         let bytes = include_bytes!("../../assets/icon.png");
-        let im = image::load_from_memory(bytes).ok()?.to_rgba8();
+        let mut im = image::load_from_memory(bytes).ok()?.to_rgba8();
+        // gpui Windows 表面按 BGRA 字节序取样
+        for p in im.chunks_exact_mut(4) {
+            p.swap(0, 2);
+        }
         Some(Arc::new(RenderImage::new(vec![image::Frame::new(im)])))
     })
     .clone()
