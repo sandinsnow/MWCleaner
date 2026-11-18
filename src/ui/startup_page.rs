@@ -188,8 +188,7 @@ impl Render for StartupPage {
                                 format!("共 {} 项", self.items.len())
                             }),
                     )
-                    .child(div().flex_1())
-                    .child(div().text_size(px(13.)).text_color(theme::muted()).child(self.status.clone())),
+                    .child(div().flex_1().min_w_0().text_right().text_size(px(13.)).text_color(theme::muted()).truncate().child(self.status.clone())),
             )
             .child(
                 div().flex().flex_col()

@@ -240,8 +240,7 @@ impl Render for JunkPage {
                             }
                         }),
                     ))
-                    .child(div().flex_1())
-                    .child(div().text_size(px(13.)).text_color(theme::muted()).child(status)),
+                    .child(div().flex_1().min_w_0().text_right().text_size(px(13.)).text_color(theme::muted()).truncate().child(status)),
             )
             .when(self.busy(), |d| {
                 let (i, t, _) = &self.progress;

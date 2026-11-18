@@ -256,7 +256,7 @@ impl Render for RootView {
                             .pb_1()
                             .text_size(px(11.))
                             .text_color(theme::muted())
-                            .child("v0.3.1 · 单文件版"),
+                            .child("v0.3.2 · 单文件版"),
                     ),
             )
             .child(div().flex_1().h_full().min_w_0().child(content))

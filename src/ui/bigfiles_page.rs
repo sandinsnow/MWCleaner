@@ -285,10 +285,11 @@ impl Render for BigFilesPage {
                         true,
                         cx.listener(|this, _, _, cx| { this.tab = Tab::Dirs; cx.notify(); }),
                     ))
-                    .child(div().flex_1())
                     .child(
                         div()
                             .flex_1()
+                            .min_w_0()
+                            .text_right()
                             .text_size(px(12.))
                             .text_color(theme::muted())
                             .truncate()

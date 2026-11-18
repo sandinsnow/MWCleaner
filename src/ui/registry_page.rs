@@ -180,6 +180,7 @@ impl Render for RegistryPage {
                 .id("reg-backup-link")
                 .flex_1()
                 .min_w_0()
+                .text_right()
                 .text_size(px(12.))
                 .text_color(theme::accent())
                 .truncate()
@@ -190,6 +191,7 @@ impl Render for RegistryPage {
             None => div()
                 .flex_1()
                 .min_w_0()
+                .text_right()
                 .text_size(px(12.))
                 .text_color(theme::muted())
                 .truncate()
@@ -239,7 +241,6 @@ impl Render for RegistryPage {
                             .text_color(theme::muted())
                             .child(format!("已勾选 {selected} 项")),
                     )
-                    .child(div().flex_1())
                     .child(status_el),
             )
             .when(self.issues.len() > shown, |d| {
