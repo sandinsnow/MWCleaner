@@ -147,6 +147,8 @@ impl Render for StartupPage {
                 div().flex()
                     .items_center()
                     .gap_3()
+                    .min_w_0()
+                    .overflow_hidden()
                     .child(button("startup-refresh", "刷新", false, true, cx.listener(|this, _, _, cx| {
                         this.items = startup::list();
                         this.armed_delete = None;

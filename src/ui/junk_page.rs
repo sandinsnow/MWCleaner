@@ -217,6 +217,8 @@ impl Render for JunkPage {
                 div().flex()
                     .items_center()
                     .gap_3()
+                    .min_w_0()
+                    .overflow_hidden()
                     .child(button("junk-scan", "扫描", true, !self.busy(), cx.listener(|this, _, _, cx| this.start_scan(cx))))
                     .when(self.phase == Phase::Scanning, |d| {
                         d.child(button("junk-cancel", "取消", false, true, cx.listener(|this, _, _, cx| {

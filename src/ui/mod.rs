@@ -1,3 +1,4 @@
+pub mod about_page;
 pub mod bigfiles_page;
 pub mod icon;
 pub mod junk_page;
@@ -12,6 +13,7 @@ use gpui::*;
 use gpui::prelude::*;
 use std::sync::{Arc, OnceLock};
 
+use about_page::AboutPage;
 use bigfiles_page::BigFilesPage;
 use junk_page::JunkPage;
 use registry_page::RegistryPage;
@@ -29,6 +31,7 @@ pub enum Page {
     BigFiles,
     Uninstall,
     Settings,
+    About,
 }
 
 impl Page {
@@ -41,6 +44,7 @@ impl Page {
             Page::BigFiles => "大文件分析",
             Page::Uninstall => "软件卸载",
             Page::Settings => "设置",
+            Page::About => "关于",
         }
     }
 }
@@ -54,6 +58,7 @@ pub struct RootView {
     bigfiles: Entity<BigFilesPage>,
     uninstall: Entity<UninstallPage>,
     settings: Entity<SettingsPage>,
+    about: Entity<AboutPage>,
 }
 
 impl RootView {
@@ -67,6 +72,7 @@ impl RootView {
             bigfiles: cx.new(|_| BigFilesPage::new()),
             uninstall: cx.new(|cx| UninstallPage::new(cx)),
             settings: cx.new(|_| SettingsPage::new()),
+            about: cx.new(|_| AboutPage::new()),
         }
     }
 }
@@ -113,6 +119,7 @@ impl Render for RootView {
             Page::BigFiles => self.bigfiles.clone().into_any_element(),
             Page::Uninstall => self.uninstall.clone().into_any_element(),
             Page::Settings => self.settings.clone().into_any_element(),
+            Page::About => self.about.clone().into_any_element(),
         };
 
         let maximized = window.is_maximized();
@@ -249,6 +256,7 @@ impl Render for RootView {
                     }))
                     .child(div().flex_1())
                     .child(nav_item(self, Page::Settings, cx))
+                    .child(nav_item(self, Page::About, cx))
                     .child(
                         div()
                             .px_4()
@@ -256,7 +264,7 @@ impl Render for RootView {
                             .pb_1()
                             .text_size(px(11.))
                             .text_color(theme::muted())
-                            .child("v0.3.2 · 单文件版"),
+                            .child("v0.4.0 · 单文件版"),
                     ),
             )
             .child(div().flex_1().h_full().min_w_0().child(content))
@@ -264,7 +272,7 @@ impl Render for RootView {
     }
 }
 
-fn brand_icon() -> Option<Arc<RenderImage>> {
+pub fn brand_icon() -> Option<Arc<RenderImage>> {
     static ICON: OnceLock<Option<Arc<RenderImage>>> = OnceLock::new();
     ICON.get_or_init(|| {
         let bytes = include_bytes!("../../assets/icon.png");

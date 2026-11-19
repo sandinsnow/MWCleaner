@@ -5,6 +5,7 @@ pub mod services;
 pub mod settings;
 pub mod startup;
 pub mod uninstall;
+pub mod update;
 
 use std::fs;
 use std::os::windows::fs::MetadataExt;

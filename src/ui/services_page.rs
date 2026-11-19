@@ -284,6 +284,8 @@ impl Render for ServicesPage {
                 div().flex()
                     .items_center()
                     .gap_3()
+                    .min_w_0()
+                    .overflow_hidden()
                     .child(button("svc-refresh", "刷新", false, !self.loading, cx.listener(|this, _, _, cx| this.reload(cx))))
                     .children({
                         let opts: [(Option<services::AdviceCategory>, &'static str); 4] = [

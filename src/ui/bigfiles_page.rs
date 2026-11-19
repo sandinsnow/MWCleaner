@@ -173,7 +173,8 @@ impl Render for BigFilesPage {
                 )
         });
 
-        let mut list = div().flex().flex_col().flex_1().min_h_0().gap_2().id("bf-list").overflow_y_scroll();
+        let list_min = if self.result.is_some() { px(90.) } else { px(0.) };
+        let mut list = div().flex().flex_col().flex_1().min_h(list_min).gap_2().id("bf-list").overflow_y_scroll();
         if let Some(r) = &self.result {
             let entries: Vec<(PathBuf, u64)> = if self.tab == Tab::Files {
                 r.files.iter().map(|f| (f.path.clone(), f.size)).collect()
@@ -249,7 +250,10 @@ impl Render for BigFilesPage {
             .gap_4()
             .child(page_header("大文件分析", "找出占用空间最大的文件与文件夹"))
             .child(
-                div().flex().flex_wrap().gap_3().items_center()
+                div().id("bf-drives").flex().flex_wrap().gap_3().items_center()
+                    .flex_shrink()
+                    .min_h_0()
+                    .overflow_y_scroll()
                     .children(drive_cards)
                     .child(
                         div()
@@ -265,6 +269,8 @@ impl Render for BigFilesPage {
                 div().flex()
                     .items_center()
                     .gap_3()
+                    .min_w_0()
+                    .overflow_hidden()
                     .child(button("bf-scan", "扫描", true, !self.scanning && self.drive.is_some(), cx.listener(|this, _, _, cx| this.start_scan(cx))))
                     .when(self.scanning, |d| {
                         d.child(button("bf-cancel", "取消", false, true, cx.listener(|this, _, _, _cx| {

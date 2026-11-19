@@ -223,7 +223,7 @@ impl Render for UninstallPage {
                 let status = if self.status.is_empty() { self.list_status() } else { self.status.clone() };
                 root = root
                     .child(
-                        div().flex().items_center().gap_3()
+                        div().flex().items_center().gap_3().min_w_0().overflow_hidden()
                             .child(button("un-refresh", "刷新", false, true, cx.listener(|this, _, _, cx| this.refresh(cx))))
                             .child(div().flex_1().min_w_0().text_right().text_size(px(12.)).text_color(theme::muted()).truncate().child(status)),
                     )
@@ -284,7 +284,7 @@ impl Render for UninstallPage {
                 let can_clean = self.phase == Phase::Leftovers && has_selection;
                 root = root
                     .child(
-                        div().flex().items_center().gap_3()
+                        div().flex().items_center().gap_3().min_w_0().overflow_hidden()
                             .child(button("un-back", "返回软件列表", false, true, cx.listener(|this, _, _, cx| this.refresh(cx))))
                             .when(self.phase == Phase::Leftovers, |d| {
                                 d.child(danger_button("un-lo-clean",
