@@ -56,7 +56,7 @@ impl Render for SettingsPage {
                         div()
                             .text_size(px(12.))
                             .text_color(theme::muted())
-                            .child("选择应用配色；「跟随系统」读取 Windows 的应用主题设置，重启应用后生效"),
+                            .child("选择应用配色，切换立即生效；「跟随系统」读取 Windows 的应用主题设置"),
                     )
                     .child(div().flex().gap_2().children(buttons)),
             )

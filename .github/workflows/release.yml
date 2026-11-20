@@ -48,6 +48,20 @@ jobs:
       - name: Rust cache
         uses: swatinem/rust-cache@v2
 
+      - name: Version gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          VER="${{ steps.tag.outputs.version }}"
+          CARGO_VER=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n1)
+          if [ "$VER" != "$CARGO_VER" ]; then
+            echo "::error::tag version $VER != Cargo.toml version $CARGO_VER"
+            exit 1
+          fi
+
+      - name: Unit tests
+        run: cargo test --bin mwcleaner --release --locked --target ${{ env.TARGET }} -- --test-threads=1
+
       # .cargo/config.toml 已设 crt-static，产物为免依赖单文件
       - name: Build release exe
         run: cargo build --release --locked --target ${{ env.TARGET }}

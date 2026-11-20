@@ -209,7 +209,7 @@ pub fn list() -> Result<Vec<ServiceInfo>, String> {
     unsafe {
         let scm = OpenSCManagerW(PCWSTR::null(), PCWSTR::null(), SC_MANAGER_ENUMERATE_SERVICE)
             .map_err(|e| format!("打开服务管理器失败: {e}"))?;
-        let mut buf: Vec<u8> = vec![0; 256 * 1024];
+        let mut buf: Vec<u64> = vec![0; 32 * 1024];
         let mut needed = 0u32;
         let mut count = 0u32;
         loop {
@@ -218,7 +218,10 @@ pub fn list() -> Result<Vec<ServiceInfo>, String> {
                 SC_ENUM_PROCESS_INFO,
                 SERVICE_WIN32,
                 SERVICE_STATE_ALL,
-                Some(buf.as_mut_slice()),
+                Some(std::slice::from_raw_parts_mut(
+                    buf.as_mut_ptr() as *mut u8,
+                    buf.len() * 8,
+                )),
                 &mut needed,
                 &mut count,
                 None,
@@ -227,7 +230,7 @@ pub fn list() -> Result<Vec<ServiceInfo>, String> {
             match r {
                 Ok(()) => break,
                 Err(e) if e.code() == ERROR_MORE_DATA.to_hresult() => {
-                    buf.resize(needed as usize + 4096, 0);
+                    buf.resize((needed as usize + 4096 + 7) / 8, 0);
                 }
                 Err(e) => {
                     let _ = CloseServiceHandle(scm);
@@ -245,7 +248,7 @@ pub fn list() -> Result<Vec<ServiceInfo>, String> {
             let display = resolve_indirect(&pwstr_to_string(s.lpDisplayName));
             let description = service_description(&name);
             let state = s.ServiceStatusProcess.dwCurrentState.0;
-            let (start_type, binary) = query_config(scm, &name).unwrap_or((3, String::new()));
+            let (start_type, binary) = query_config(scm, &name).unwrap_or((0, String::new()));
             result.push(ServiceInfo { name, display, description, binary, state, start_type });
         }
         let _ = CloseServiceHandle(scm);
@@ -258,16 +261,24 @@ unsafe fn query_config(scm: SC_HANDLE, name: &str) -> Option<(u32, String)> {
     let wide = to_wide(name);
     let svc = OpenServiceW(scm, PCWSTR(wide.as_ptr()), SERVICE_QUERY_CONFIG).ok()?;
     let mut buf = vec![0u64; 1024];
-    let ptr = buf.as_mut_ptr() as *mut QUERY_SERVICE_CONFIGW;
     let mut needed = 0u32;
-    let ok = QueryServiceConfigW(svc, Some(ptr), 8192, &mut needed).is_ok();
-    let _ = CloseServiceHandle(svc);
-    if ok {
-        let cfg = &*ptr;
-        Some((cfg.dwStartType.0, pwstr_to_string(cfg.lpBinaryPathName)))
-    } else {
-        None
+    let mut out = None;
+    loop {
+        let ptr = buf.as_mut_ptr() as *mut QUERY_SERVICE_CONFIGW;
+        match QueryServiceConfigW(svc, Some(ptr), (buf.len() * 8) as u32, &mut needed) {
+            Ok(()) => {
+                let cfg = &*ptr;
+                out = Some((cfg.dwStartType.0, pwstr_to_string(cfg.lpBinaryPathName)));
+                break;
+            }
+            Err(e) if e.code() == ERROR_MORE_DATA.to_hresult() => {
+                buf.resize((needed as usize + 4096 + 7) / 8, 0);
+            }
+            Err(_) => break,
+        }
     }
+    let _ = CloseServiceHandle(svc);
+    out
 }
 
 pub fn set_start_type(name: &str, start_type: u32) -> Result<(), String> {

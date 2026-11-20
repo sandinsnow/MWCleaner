@@ -6,7 +6,7 @@ use windows::core::PCWSTR;
 use windows::Win32::Foundation::HWND;
 use windows::Win32::UI::Shell::{
     SHFileOperationW, SHFILEOPSTRUCTW, SHQueryRecycleBinW, SHEmptyRecycleBinW, FO_DELETE,
-    FOF_ALLOWUNDO, FOF_NOCONFIRMATION, FOF_NOERRORUI, FOF_SILENT, SHQUERYRBINFO,
+    FOF_ALLOWUNDO, FOF_NOERRORUI, FOF_SILENT, SHQUERYRBINFO,
     SHERB_NOCONFIRMATION, SHERB_NOPROGRESSUI, SHERB_NOSOUND,
 };
 
@@ -27,6 +27,7 @@ pub struct CleanResult {
     pub freed: u64,
     pub failed: u64,
     pub recycled: bool,
+    pub cancelled: bool,
 }
 
 fn env_dir(var: &str, sub: &str) -> Option<PathBuf> {
@@ -293,7 +294,8 @@ pub(crate) unsafe fn recycle_paths(paths: &[PathBuf]) -> bool {
         hwnd: HWND::default(),
         wFunc: FO_DELETE,
         pFrom: PCWSTR(from.as_ptr()),
-        fFlags: (FOF_ALLOWUNDO | FOF_NOCONFIRMATION | FOF_SILENT | FOF_NOERRORUI).0 as u16,
+        // 不带 FOF_NOCONFIRMATION：超回收站容量时由 Shell 弹窗征求永久删除同意，不静默直删
+        fFlags: (FOF_ALLOWUNDO | FOF_SILENT | FOF_NOERRORUI).0 as u16,
         ..Default::default()
     };
     SHFileOperationW(&mut op) == 0
@@ -343,12 +345,16 @@ pub fn clean(
     cats: &[JunkCategory],
     progress: &dyn Fn(usize, usize, &str),
     to_recycle: bool,
+    cancel: &AtomicBool,
 ) -> CleanResult {
     let selected: Vec<_> = cats.iter().filter(|c| c.selected).collect();
     let total = selected.len();
     let mut freed = 0u64;
     let mut failed = 0u64;
     for (i, cat) in selected.iter().enumerate() {
+        if cancel.load(Ordering::Relaxed) {
+            break;
+        }
         progress(i, total, cat.name);
         if cat.recycle_bin {
             let before = recycle_bin_size().0;
@@ -368,6 +374,9 @@ pub fn clean(
             continue;
         }
         for root in &cat.roots {
+            if cancel.load(Ordering::Relaxed) {
+                break;
+            }
             if root.is_file() {
                 let len = root.metadata().map(|m| m.len()).unwrap_or(0);
                 let ok = if to_recycle {
@@ -391,8 +400,9 @@ pub fn clean(
             }
         }
     }
-    progress(total, total, "完成");
-    CleanResult { freed, failed, recycled: to_recycle }
+    let cancelled = cancel.load(Ordering::Relaxed);
+    progress(total, total, if cancelled { "已取消" } else { "完成" });
+    CleanResult { freed, failed, recycled: to_recycle, cancelled }
 }
 
 #[cfg(test)]
@@ -435,7 +445,7 @@ mod tests {
     fn recycle_roundtrip() {
         let d = test_dir("rectest");
         let before = bin_count();
-        let r = clean(&[cat(d.clone())], &|_, _, _| {}, true);
+        let r = clean(&[cat(d.clone())], &|_, _, _| {}, true, &AtomicBool::new(false));
         assert_eq!(r.failed, 0);
         assert!(r.recycled);
         assert!(r.freed >= 2053);
@@ -447,7 +457,7 @@ mod tests {
     #[test]
     fn direct_delete() {
         let d = test_dir("directtest");
-        let r = clean(&[cat(d.clone())], &|_, _, _| {}, false);
+        let r = clean(&[cat(d.clone())], &|_, _, _| {}, false, &AtomicBool::new(false));
         assert_eq!(r.failed, 0);
         assert!(!r.recycled);
         assert!(fs::read_dir(&d).unwrap().next().is_none());
@@ -459,5 +469,16 @@ mod tests {
         let c = AtomicBool::new(true);
         let cats = scan(&|_, _, _| {}, &c);
         assert!(cats.iter().all(|c| c.size == 0));
+    }
+
+    #[test]
+    fn clean_cancel() {
+        let d = test_dir("cleancancel");
+        let c = AtomicBool::new(true);
+        let r = clean(&[cat(d.clone())], &|_, _, _| {}, false, &c);
+        assert!(r.cancelled);
+        assert_eq!(r.freed, 0);
+        assert!(fs::read_dir(&d).unwrap().next().is_some());
+        let _ = fs::remove_dir_all(&d);
     }
 }

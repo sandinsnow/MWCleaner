@@ -259,20 +259,50 @@ pub fn set_enabled(item: &StartupItem, enabled: bool) -> io::Result<()> {
 
 pub fn delete(item: &StartupItem) -> io::Result<()> {
     if item.enabled {
-        if item.is_folder {
-            fs::remove_file(PathBuf::from(&item.source).join(&item.name))?;
-        } else {
-            let (sub, hive) = strip_hive(&item.source);
-            let key = hive.open_subkey_with_flags(sub, KEY_WRITE)?;
-            key.delete_value(&item.name)?;
-        }
-    } else {
-        let store = disabled_store()?;
-        store.delete_value(store_id(item))?;
-        if item.is_folder {
-            let backup = app_data_dir().join("disabled-startup").join(&item.name);
-            let _ = fs::remove_file(backup);
-        }
+        // A3：启用项删除先走禁用备份（注册表命令/启动文件夹 lnk），可在已禁用列表启用还原
+        return set_enabled(item, false);
+    }
+    let store = disabled_store()?;
+    store.delete_value(store_id(item))?;
+    if item.is_folder {
+        let backup = app_data_dir().join("disabled-startup").join(&item.name);
+        let _ = fs::remove_file(backup);
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn delete_enabled_backup_roundtrip() {
+        let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+        let (run, _) = hkcu.create_subkey("Software\\MWCleanerTest\\Run").unwrap();
+        run.set_value("MWCleanerTestEntry", &"cmd.exe /c exit 0").unwrap();
+        let item = StartupItem {
+            name: "MWCleanerTestEntry".into(),
+            description: String::new(),
+            command: "cmd.exe /c exit 0".into(),
+            source: "HKCU\\Software\\MWCleanerTest\\Run".into(),
+            is_folder: false,
+            enabled: true,
+        };
+        delete(&item).unwrap();
+        assert!(run.get_value::<String, _>("MWCleanerTestEntry").is_err());
+        let store = disabled_store().unwrap();
+        assert!(store.get_value::<String, _>(&store_id(&item)).is_ok());
+
+        let disabled = StartupItem { enabled: false, ..item.clone() };
+        set_enabled(&disabled, true).unwrap();
+        assert_eq!(
+            run.get_value::<String, _>("MWCleanerTestEntry").unwrap(),
+            "cmd.exe /c exit 0"
+        );
+        assert!(store.get_value::<String, _>(&store_id(&item)).is_err());
+
+        set_enabled(&item, false).unwrap();
+        delete(&disabled).unwrap();
+        hkcu.delete_subkey_all("Software\\MWCleanerTest").unwrap();
+    }
 }

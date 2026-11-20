@@ -44,6 +44,7 @@ impl ServicesPage {
 
     fn reload(&mut self, cx: &mut Context<Self>) {
         self.loading = true;
+        self.armed = None;
         cx.notify();
         pump(
             cx,
@@ -64,6 +65,7 @@ impl ServicesPage {
                             list.len(), rec, caution
                         ).into();
                         this.services = list;
+                        this.armed = None;
                         this.refresh_undo();
                         let binaries: Vec<String> =
                             this.services.iter().map(|s| s.binary.clone()).collect();
@@ -102,7 +104,8 @@ impl ServicesPage {
                 match services::original_start_type(&name) {
                     Some(rec) if rec == target => services::clear_original(&name),
                     Some(_) => {}
-                    None => services::record_original(&name, orig),
+                    None if orig != 0 => services::record_original(&name, orig),
+                    None => {}
                 }
                 self.refresh_undo();
                 self.status = format!(
@@ -197,7 +200,7 @@ impl Render for ServicesPage {
                 .py_2p5()
                 .rounded_md()
                 .bg(theme::panel())
-                .child(icon::icon_or_placeholder(&icon::for_binary(&s.binary)))
+                .child(icon::icon_or_placeholder(&icon::cached_binary(&s.binary)))
                 .child(
                     div().flex().flex_col()
                         .flex_1()

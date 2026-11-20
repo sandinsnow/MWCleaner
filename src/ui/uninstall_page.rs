@@ -9,7 +9,8 @@ use crate::ui::{badge, button, checkbox, danger_button, icon, page_header, pump,
 enum Msg {
     IconsReady,
     Uninstalled(i32),
-    StillInstalled,
+    StillInstalled(Vec<AppEntry>),
+    Refreshed(Vec<AppEntry>),
     Leftovers(Vec<LeftoverItem>),
     Cleaned(uninstall::CleanReport),
 }
@@ -36,7 +37,7 @@ pub struct UninstallPage {
 impl UninstallPage {
     pub fn new(cx: &mut Context<Self>) -> Self {
         let apps = uninstall::list();
-        let mut this = Self {
+        let this = Self {
             apps,
             phase: Phase::List,
             current: None,
@@ -74,15 +75,27 @@ impl UninstallPage {
     }
 
     fn refresh(&mut self, cx: &mut Context<Self>) {
-        self.apps = uninstall::list();
         self.phase = Phase::List;
         self.current = None;
         self.leftovers.clear();
         self.armed_uninstall = None;
         self.armed_clean = false;
         self.status = self.list_status();
-        self.warm_icons(cx);
         cx.notify();
+        pump(
+            cx,
+            |tx| {
+                let _ = tx.try_send(Msg::Refreshed(uninstall::list()));
+            },
+            |this, msg, cx| {
+                if let Msg::Refreshed(apps) = msg {
+                    this.apps = apps;
+                    this.status = this.list_status();
+                    this.warm_icons(cx);
+                }
+                cx.notify();
+            },
+        );
     }
 
     fn start_uninstall(&mut self, i: usize, cx: &mut Context<Self>) {
@@ -99,7 +112,7 @@ impl UninstallPage {
                 let _ = tx.try_send(Msg::Uninstalled(code));
                 let installed = uninstall::list();
                 if installed.iter().any(|a| a.reg_key == app.reg_key) {
-                    let _ = tx.try_send(Msg::StillInstalled);
+                    let _ = tx.try_send(Msg::StillInstalled(installed));
                     return;
                 }
                 let items = uninstall::scan_leftovers(&app, &installed);
@@ -110,11 +123,12 @@ impl UninstallPage {
                     Msg::Uninstalled(code) => {
                         this.status = format!("卸载程序已退出（代码 {code}），正在扫描残留…").into();
                     }
-                    Msg::StillInstalled => {
+                    Msg::StillInstalled(apps) => {
                         this.status = "卸载未完成（软件仍在已安装列表），已返回列表".into();
                         this.phase = Phase::List;
                         this.current = None;
-                        this.apps = uninstall::list();
+                        this.apps = apps;
+                        this.warm_icons(cx);
                     }
                     Msg::Leftovers(items) => {
                         this.status = format!(
@@ -179,7 +193,7 @@ impl Render for UninstallPage {
             Phase::List => {
                 let rows = self.apps.iter().enumerate().map(|(i, app)| {
                     let armed = self.armed_uninstall == Some(i);
-                    let im = icon::for_binary(app.icon_source());
+                    let im = icon::cached_binary(app.icon_source());
                     let sub = match (app.publisher.is_empty(), app.version.is_empty()) {
                         (false, false) => format!("{} · {}", app.publisher, app.version),
                         (false, true) => app.publisher.clone(),

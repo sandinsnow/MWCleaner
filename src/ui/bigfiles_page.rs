@@ -11,6 +11,7 @@ use crate::ui::{button, danger_button, page_header, pump, size_bar, theme, usage
 enum Msg {
     Progress(u64, String),
     Done(ScanResult),
+    Deleted(PathBuf, std::io::Result<()>),
 }
 
 #[derive(PartialEq)]
@@ -87,6 +88,7 @@ impl BigFilesPage {
                         this.scanning = false;
                         this.cancel = None;
                     }
+                    _ => {}
                 }
                 cx.notify();
             },
@@ -94,18 +96,30 @@ impl BigFilesPage {
     }
 
     fn delete(&mut self, path: PathBuf, cx: &mut Context<Self>) {
-        match bigfiles::delete_path(&path) {
-            Ok(()) => {
-                if let Some(r) = &mut self.result {
-                    r.files.retain(|f| f.path != path);
-                    r.dirs.retain(|d| d.path != path);
-                }
-                self.status = format!("已删除 {}", path.display()).into();
-            }
-            Err(e) => self.status = format!("删除失败：{e}").into(),
-        }
         self.armed_delete = None;
         cx.notify();
+        pump(
+            cx,
+            move |tx| {
+                let r = bigfiles::delete_path(&path);
+                let _ = tx.try_send(Msg::Deleted(path, r));
+            },
+            |this, msg, cx| {
+                if let Msg::Deleted(path, r) = msg {
+                    match r {
+                        Ok(()) => {
+                            if let Some(res) = &mut this.result {
+                                res.files.retain(|f| f.path != path);
+                                res.dirs.retain(|d| d.path != path);
+                            }
+                            this.status = format!("已删除 {}", path.display()).into();
+                        }
+                        Err(e) => this.status = format!("删除失败：{e}").into(),
+                    }
+                }
+                cx.notify();
+            },
+        );
     }
 }
 

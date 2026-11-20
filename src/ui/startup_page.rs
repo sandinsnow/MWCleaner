@@ -1,7 +1,11 @@
 use gpui::*;
 
 use crate::core::startup::{self, StartupItem};
-use crate::ui::{button, danger_button, icon, page_header, theme};
+use crate::ui::{button, danger_button, icon, page_header, pump, theme};
+
+enum Msg {
+    IconsReady,
+}
 
 pub struct StartupPage {
     items: Vec<StartupItem>,
@@ -11,13 +15,35 @@ pub struct StartupPage {
 }
 
 impl StartupPage {
-    pub fn new() -> Self {
-        Self {
+    pub fn new(cx: &mut Context<Self>) -> Self {
+        let this = Self {
             items: startup::list(),
             status: "管理开机自启动项，禁用不会删除原程序".into(),
             armed_delete: None,
             filter: None,
-        }
+        };
+        this.warm_icons(cx);
+        this
+    }
+
+    fn warm_icons(&self, cx: &mut Context<Self>) {
+        let commands: Vec<String> = self.items.iter().map(|i| i.command.clone()).collect();
+        pump(
+            cx,
+            move |tx| {
+                unsafe {
+                    let _ = windows::Win32::System::Com::CoInitializeEx(
+                        None,
+                        windows::Win32::System::Com::COINIT_APARTMENTTHREADED,
+                    );
+                }
+                for c in &commands {
+                    icon::for_command(c);
+                }
+                let _ = tx.try_send(Msg::IconsReady);
+            },
+            |_, _, cx| cx.notify(),
+        );
     }
 
     fn toggle(&mut self, i: usize, cx: &mut Context<Self>) {
@@ -32,6 +58,7 @@ impl StartupPage {
             }
         }
         self.items = startup::list();
+        self.warm_icons(cx);
         self.armed_delete = None;
         cx.notify();
     }
@@ -40,13 +67,18 @@ impl StartupPage {
         let item = self.items[i].clone();
         match startup::delete(&item) {
             Ok(()) => {
-                self.status = format!("已删除「{}」", item.name).into();
+                self.status = if item.enabled {
+                    format!("已删除「{}」（已备份，可在「已禁用」中启用还原）", item.name).into()
+                } else {
+                    format!("已删除「{}」", item.name).into()
+                };
             }
             Err(e) => {
                 self.status = format!("删除失败：{e}").into();
             }
         }
         self.items = startup::list();
+        self.warm_icons(cx);
         self.armed_delete = None;
         cx.notify();
     }
@@ -78,7 +110,7 @@ impl Render for StartupPage {
                 .py_3()
                 .rounded_md()
                 .bg(theme::panel())
-                .child(icon::icon_or_placeholder(&icon::for_command(&item.command)))
+                .child(icon::icon_or_placeholder(&icon::cached_command(&item.command)))
                 .child(
                     div().flex().flex_col()
                         .flex_1()
@@ -151,6 +183,7 @@ impl Render for StartupPage {
                     .overflow_hidden()
                     .child(button("startup-refresh", "刷新", false, true, cx.listener(|this, _, _, cx| {
                         this.items = startup::list();
+                        this.warm_icons(cx);
                         this.armed_delete = None;
                         cx.notify();
                     })))

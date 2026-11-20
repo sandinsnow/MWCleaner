@@ -96,6 +96,10 @@ fn http_get_latest(proxy: Option<&str>) -> Result<String, String> {
         if session.is_null() {
             return Err(format!("WinHttpOpen 失败 ({})", last_err()));
         }
+        if WinHttpSetTimeouts(session, 5000, 8000, 8000, 8000).is_err() {
+            let _ = WinHttpCloseHandle(session);
+            return Err(format!("设置超时失败 ({})", last_err()));
+        }
         let host = wide("api.github.com");
         let conn = WinHttpConnect(session, PCWSTR(host.as_ptr()), 443, 0);
         if conn.is_null() {
@@ -127,7 +131,6 @@ fn http_get_latest(proxy: Option<&str>) -> Result<String, String> {
 }
 
 unsafe fn read_response(req: *mut c_void) -> Result<String, String> {
-    let _ = WinHttpSetTimeouts(req, 5000, 8000, 8000, 8000);
     let headers = wide(&format!(
         "User-Agent: MWCleaner/{}\r\nAccept: application/vnd.github+json",
         current_version()

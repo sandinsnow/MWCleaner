@@ -8,10 +8,10 @@ use crate::core::settings;
 use crate::ui::{button, chart_color, checkbox, danger_button, dot, page_header, progress_bar, pump, size_bar, stacked_bar, theme};
 
 enum Msg {
-    ScanProgress(usize, usize, String),
-    Scanned(Vec<JunkCategory>),
-    CleanProgress(usize, usize, String),
-    Cleaned(CleanResult),
+    ScanProgress(u64, usize, usize, String),
+    Scanned(u64, Vec<JunkCategory>),
+    CleanProgress(u64, usize, usize, String),
+    Cleaned(u64, CleanResult),
 }
 
 #[derive(PartialEq)]
@@ -31,6 +31,7 @@ pub struct JunkPage {
     armed: bool,
     cancel: Option<Arc<AtomicBool>>,
     cancelled: bool,
+    gen: u64,
 }
 
 impl JunkPage {
@@ -43,6 +44,7 @@ impl JunkPage {
             armed: false,
             cancel: None,
             cancelled: false,
+            gen: 0,
         }
     }
 
@@ -55,6 +57,8 @@ impl JunkPage {
         self.result = None;
         self.armed = false;
         self.cancelled = false;
+        self.gen += 1;
+        let gen = self.gen;
         let cancel = Arc::new(AtomicBool::new(false));
         self.cancel = Some(cancel.clone());
         cx.notify();
@@ -63,16 +67,16 @@ impl JunkPage {
             move |tx| {
                 let cats = junk::scan(
                     &|i, t, l| {
-                        let _ = tx.try_send(Msg::ScanProgress(i, t, l.to_string()));
+                        let _ = tx.try_send(Msg::ScanProgress(gen, i, t, l.to_string()));
                     },
                     &cancel,
                 );
-                let _ = tx.try_send(Msg::Scanned(cats));
+                let _ = tx.try_send(Msg::Scanned(gen, cats));
             },
             |this, msg, cx| {
                 match msg {
-                    Msg::ScanProgress(i, t, l) => this.progress = (i, t, l),
-                    Msg::Scanned(cats) => {
+                    Msg::ScanProgress(g, i, t, l) if g == this.gen => this.progress = (i, t, l),
+                    Msg::Scanned(g, cats) if g == this.gen => {
                         this.cancel = None;
                         if this.cancelled {
                             this.phase = Phase::Idle;
@@ -91,6 +95,11 @@ impl JunkPage {
     fn start_clean(&mut self, cx: &mut Context<Self>) {
         self.phase = Phase::Cleaning;
         self.armed = false;
+        self.cancelled = false;
+        self.gen += 1;
+        let gen = self.gen;
+        let cancel = Arc::new(AtomicBool::new(false));
+        self.cancel = Some(cancel.clone());
         cx.notify();
         let cats = self.cats.clone();
         let to_recycle = settings::load_flag("RecycleBin", true);
@@ -100,16 +109,18 @@ impl JunkPage {
                 let r = junk::clean(
                     &cats,
                     &|i, t, l| {
-                        let _ = tx.try_send(Msg::CleanProgress(i, t, l.to_string()));
+                        let _ = tx.try_send(Msg::CleanProgress(gen, i, t, l.to_string()));
                     },
                     to_recycle,
+                    &cancel,
                 );
-                let _ = tx.try_send(Msg::Cleaned(r));
+                let _ = tx.try_send(Msg::Cleaned(gen, r));
             },
             |this, msg, cx| {
                 match msg {
-                    Msg::CleanProgress(i, t, l) => this.progress = (i, t, l),
-                    Msg::Cleaned(r) => {
+                    Msg::CleanProgress(g, i, t, l) if g == this.gen => this.progress = (i, t, l),
+                    Msg::Cleaned(g, r) if g == this.gen => {
+                        this.cancel = None;
                         this.result = Some(r);
                         this.phase = Phase::Done;
                     }
@@ -190,16 +201,17 @@ impl Render for JunkPage {
             Phase::Cleaning => format!("正在清理：{}", self.progress.2).into(),
             Phase::Done => {
                 let r = self.result.as_ref().unwrap();
+                let head = if r.cancelled { "清理已取消：" } else { "清理完成：" };
                 if r.recycled {
                     format!(
-                        "清理完成：{} 已移入回收站，{} 项被占用或无权限已跳过",
+                        "{head}{} 已移入回收站，{} 项被占用或无权限已跳过",
                         crate::core::fmt_size(r.freed),
                         r.failed
                     )
                     .into()
                 } else {
                     format!(
-                        "清理完成：释放 {}，{} 个文件被占用或无权限已跳过",
+                        "{head}释放 {}，{} 个文件被占用或无权限已跳过",
                         crate::core::fmt_size(r.freed),
                         r.failed
                     )
@@ -220,13 +232,15 @@ impl Render for JunkPage {
                     .min_w_0()
                     .overflow_hidden()
                     .child(button("junk-scan", "扫描", true, !self.busy(), cx.listener(|this, _, _, cx| this.start_scan(cx))))
-                    .when(self.phase == Phase::Scanning, |d| {
+                    .when(self.busy(), |d| {
                         d.child(button("junk-cancel", "取消", false, true, cx.listener(|this, _, _, cx| {
                             if let Some(c) = &this.cancel {
                                 c.store(true, Ordering::Relaxed);
                             }
                             this.cancelled = true;
-                            this.phase = Phase::Idle;
+                            if this.phase == Phase::Scanning {
+                                this.phase = Phase::Idle;
+                            }
                             cx.notify();
                         })))
                     })

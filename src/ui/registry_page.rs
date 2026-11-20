@@ -8,7 +8,7 @@ use crate::core::registry::{self, CleanOutcome, RegIssue};
 use crate::ui::{button, checkbox, danger_button, page_header, pump, theme};
 
 enum Msg {
-    Scanned(Vec<RegIssue>),
+    Scanned(u64, Vec<RegIssue>),
     Cleaned(Result<CleanOutcome, String>),
 }
 
@@ -28,6 +28,7 @@ pub struct RegistryPage {
     armed: bool,
     cancel: Option<Arc<AtomicBool>>,
     cancelled: bool,
+    scan_gen: u64,
     last_backup: Option<PathBuf>,
 }
 
@@ -70,6 +71,7 @@ impl RegistryPage {
             armed: false,
             cancel: None,
             cancelled: false,
+            scan_gen: 0,
             last_backup: None,
         }
     }
@@ -82,16 +84,21 @@ impl RegistryPage {
         self.phase = Phase::Scanning;
         self.armed = false;
         self.cancelled = false;
+        self.scan_gen += 1;
+        let gen = self.scan_gen;
         let cancel = Arc::new(AtomicBool::new(false));
         self.cancel = Some(cancel.clone());
         cx.notify();
         pump(
             cx,
             move |tx| {
-                let _ = tx.try_send(Msg::Scanned(registry::scan(&cancel)));
+                let _ = tx.try_send(Msg::Scanned(gen, registry::scan(&cancel)));
             },
             |this, msg, cx| {
-                if let Msg::Scanned(issues) = msg {
+                if let Msg::Scanned(g, issues) = msg {
+                    if g != this.scan_gen {
+                        return;
+                    }
                     this.cancel = None;
                     if this.cancelled {
                         this.phase = Phase::Idle;

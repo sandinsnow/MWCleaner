@@ -240,6 +240,21 @@ pub fn for_binary(raw: &str) -> Option<Arc<RenderImage>> {
     lookup(normalize_binary(&base)?, idx)
 }
 
+fn cached(key: String) -> Option<Arc<RenderImage>> {
+    cache().lock().ok()?.get(&key).cloned().flatten()
+}
+
+pub fn cached_command(command: &str) -> Option<Arc<RenderImage>> {
+    let p = exe_path(command)?;
+    cached(format!("{}#0", p.to_string_lossy().to_lowercase()))
+}
+
+pub fn cached_binary(raw: &str) -> Option<Arc<RenderImage>> {
+    let (base, idx) = parse_icon_spec(raw);
+    let p = normalize_binary(&base)?;
+    cached(format!("{}#{idx}", p.to_string_lossy().to_lowercase()))
+}
+
 pub fn icon_or_placeholder(icon: &Option<Arc<RenderImage>>) -> AnyElement {
     match icon {
         Some(im) => img(im.clone())

@@ -9,6 +9,16 @@ use winreg::{RegKey, RegValue};
 
 use super::app_data_dir;
 
+/// 保守判缺失：先展开 %env%；相对路径与访问错误一律视为"存在"，避免误删有效项。
+fn path_missing(raw: &str) -> bool {
+    let expanded = super::startup::expand_env(raw);
+    let p = Path::new(&expanded);
+    if !p.is_absolute() {
+        return false;
+    }
+    matches!(p.try_exists(), Ok(false))
+}
+
 #[derive(Clone)]
 pub struct RegIssue {
     pub key: String,
@@ -86,10 +96,10 @@ fn scan_uninstall(issues: &mut Vec<RegIssue>, cancel: &AtomicBool) {
                 }
             }
             let exe_missing = match &uninstall {
-                Some(cmd) => exe_from_command(cmd).map(|p| !p.exists()).unwrap_or(true),
+                Some(cmd) => exe_from_command(cmd).map(|p| path_missing(&p.to_string_lossy())).unwrap_or(true),
                 None => true,
             };
-            let loc_missing = location.as_ref().map(|p| !Path::new(p).exists()).unwrap_or(true);
+            let loc_missing = location.as_ref().map(|p| path_missing(p)).unwrap_or(true);
             if exe_missing && loc_missing {
                 issues.push(RegIssue {
                     key: full,
@@ -114,7 +124,7 @@ fn scan_shared_dlls(issues: &mut Vec<RegIssue>, cancel: &AtomicBool) {
             if cancel.load(Ordering::Relaxed) {
                 return;
             }
-            if !Path::new(&name).exists() {
+            if path_missing(&name) {
                 issues.push(RegIssue {
                     key: root.to_string(),
                     value_name: Some(name.clone()),
@@ -140,7 +150,7 @@ fn scan_app_paths(issues: &mut Vec<RegIssue>, cancel: &AtomicBool) {
             }
             let Ok(entry) = key.open_subkey_with_flags(&sub_name, KEY_READ) else { continue };
             let Some(exe) = get_string(&entry, "") else { continue };
-            if !Path::new(&exe).exists() {
+            if path_missing(&exe) {
                 issues.push(RegIssue {
                     key: format!("{root}\\{sub_name}"),
                     value_name: None,
@@ -178,7 +188,15 @@ fn value_line(name: &str, v: &RegValue) -> String {
         format!("\"{}\"", reg_escape(name))
     };
     match v.vtype {
-        REG_SZ => format!("{n}=\"{}\"", reg_escape(&String::from_reg_value(v).unwrap_or_default())),
+        REG_SZ => {
+            let s = String::from_reg_value(v).unwrap_or_default();
+            if s.chars().any(|c| c.is_control()) {
+                let bytes: Vec<u8> = s.encode_utf16().chain([0]).flat_map(|u| u.to_le_bytes()).collect();
+                format!("{n}=hex(1):{}", hex_list(&bytes))
+            } else {
+                format!("{n}=\"{}\"", reg_escape(&s))
+            }
+        }
         REG_EXPAND_SZ => {
             let s = String::from_reg_value(v).unwrap_or_default();
             let bytes: Vec<u8> = s.encode_utf16().chain([0]).flat_map(|u| u.to_le_bytes()).collect();
@@ -197,17 +215,17 @@ fn hex_list(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect::<Vec<_>>().join(",")
 }
 
-fn export_key(out: &mut String, hive: &RegKey, path: &str, display_path: &str) {
+fn export_key(out: &mut String, hive: &RegKey, path: &str, display_path: &str) -> io::Result<()> {
     out.push_str(&format!("\n[{display_path}]\n"));
-    if let Ok(key) = hive.open_subkey_with_flags(path, KEY_READ) {
-        for (name, v) in key.enum_values().flatten() {
-            out.push_str(&value_line(&name, &v));
-            out.push('\n');
-        }
-        for sub in key.enum_keys().flatten() {
-            export_key(out, hive, &format!("{path}\\{sub}"), &format!("{display_path}\\{sub}"));
-        }
+    let key = hive.open_subkey_with_flags(path, KEY_READ)?;
+    for (name, v) in key.enum_values().flatten() {
+        out.push_str(&value_line(&name, &v));
+        out.push('\n');
     }
+    for sub in key.enum_keys().flatten() {
+        export_key(out, hive, &format!("{path}\\{sub}"), &format!("{display_path}\\{sub}"))?;
+    }
+    Ok(())
 }
 
 fn write_backup(issues: &[RegIssue]) -> io::Result<PathBuf> {
@@ -216,15 +234,13 @@ fn write_backup(issues: &[RegIssue]) -> io::Result<PathBuf> {
         let (hive, sub) = split_hive(&issue.key);
         let display = format!("{}\\{}", hive_long(&issue.key), sub);
         match &issue.value_name {
-            None => export_key(&mut text, &hive, sub, &display),
+            None => export_key(&mut text, &hive, sub, &display)?,
             Some(name) => {
                 text.push_str(&format!("\n[{display}]\n"));
-                if let Ok(key) = hive.open_subkey_with_flags(sub, KEY_READ) {
-                    if let Ok(v) = key.get_raw_value(name) {
-                        text.push_str(&value_line(name, &v));
-                        text.push('\n');
-                    }
-                }
+                let key = hive.open_subkey_with_flags(sub, KEY_READ)?;
+                let v = key.get_raw_value(name)?;
+                text.push_str(&value_line(name, &v));
+                text.push('\n');
             }
         }
     }
@@ -266,7 +282,7 @@ pub fn backup_and_clean(issues: &[RegIssue]) -> Result<CleanOutcome, String> {
         return Err("没有勾选任何项目".into());
     }
     let refs: Vec<RegIssue> = selected.iter().map(|i| (*i).clone()).collect();
-    let backup = write_backup(&refs).map_err(|e| format!("写入备份失败: {e}"))?;
+    let backup = write_backup(&refs).map_err(|e| format!("备份不完整或写入失败，已中止清理: {e}"))?;
     let mut deleted = 0;
     let mut failed = 0;
     for issue in &selected {
@@ -324,5 +340,27 @@ mod tests {
         assert_eq!(k2.get_value::<u32, _>("D").unwrap(), 7);
         let _ = delete_key_recursive(&hkcu, "Software\\MWCleanerTest");
         let _ = fs::remove_file(&o.backup);
+    }
+
+    #[test]
+    fn missing_path_conservative() {
+        assert!(!path_missing("relative\\path.exe"));
+        assert!(!path_missing("%TEMP%"));
+        assert!(!path_missing("C:\\Windows\\explorer.exe"));
+        assert!(path_missing("C:\\mwcleaner_definitely_missing_xyz.exe"));
+    }
+
+    #[test]
+    fn reg_sz_control_chars_hex() {
+        let v = RegValue {
+            bytes: "a\nb".encode_utf16().chain([0]).flat_map(|u| u.to_le_bytes()).collect(),
+            vtype: REG_SZ,
+        };
+        assert!(value_line("x", &v).starts_with("\"x\"=hex(1):"));
+        let plain = RegValue {
+            bytes: "ab".encode_utf16().chain([0]).flat_map(|u| u.to_le_bytes()).collect(),
+            vtype: REG_SZ,
+        };
+        assert_eq!(value_line("x", &plain), "\"x\"=\"ab\"");
     }
 }

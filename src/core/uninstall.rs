@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 use std::fs;
 use std::os::windows::process::CommandExt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use winreg::enums::*;
@@ -109,9 +109,9 @@ fn parse_command(raw: &str) -> Option<(String, String)> {
 pub fn run_uninstaller(app: &AppEntry) -> Result<i32, String> {
     let (exe, mut args) = parse_command(&app.uninstall)
         .ok_or_else(|| "无法解析卸载命令".to_string())?;
-    // MSI 的 /I 是维护模式，改 /X 直接进入卸载
+    // MSI 的 /I 是维护模式，改 /X 直接进入卸载（仅独立 token，避免误改 /INSTALLDIR 等）
     if exe.to_ascii_lowercase().ends_with("msiexec.exe") {
-        args = args.replace("/I", "/X").replace("/i", "/X");
+        args = replace_msi_install_token(&args);
     }
     let mut cmd = Command::new(&exe);
     if !args.is_empty() {
@@ -131,9 +131,32 @@ fn normalize(s: &str) -> String {
     s.chars().filter(|c| c.is_ascii_alphanumeric()).map(|c| c.to_ascii_lowercase()).collect()
 }
 
+fn replace_msi_install_token(args: &str) -> String {
+    let chars: Vec<char> = args.chars().collect();
+    let mut out = String::new();
+    let mut i = 0;
+    while i < chars.len() {
+        let boundary_before = i == 0 || chars[i - 1] == ' ';
+        if chars[i] == '/'
+            && i + 1 < chars.len()
+            && (chars[i + 1] == 'I' || chars[i + 1] == 'i')
+            && boundary_before
+            && (i + 2 == chars.len() || chars[i + 2] == ' ' || chars[i + 2] == '{')
+        {
+            out.push_str("/X");
+            i += 2;
+        } else {
+            out.push(chars[i]);
+            i += 1;
+        }
+    }
+    out
+}
+
 const WHITELIST: &[&str] = &[
     "microsoft", "windows", "commonfiles", "packages", "temp", "mwcleaner",
     "packagecache", "applicationdata", "programs", "windowskits",
+    "tencentfiles", "wechatfiles", "weixin", "wxwork", "dingtalk",
 ];
 
 #[derive(Clone, PartialEq)]
@@ -166,6 +189,42 @@ fn leaf_norm(path: &str) -> String {
         .unwrap_or_default()
 }
 
+/// 目录名与标识匹配：仅精确相等或"标识+纯数字版本后缀"，避免子串误伤用户数据目录。
+fn dir_matches(id: &str, n: &str) -> bool {
+    if id.len() < 4 {
+        return false;
+    }
+    n == id
+        || (n.len() > id.len()
+            && n.starts_with(id)
+            && n[id.len()..].chars().all(|c| c.is_ascii_digit()))
+}
+
+/// InstallLocation 归属校验：叶名须等于产品名；厂商名叶目录仅在其下无其他已安装软件时才接受。
+fn install_dir_owned(app: &AppEntry, installed: &[AppEntry], install: &Path) -> bool {
+    let leaf = leaf_norm(&app.install_dir);
+    let name = normalize(&app.name);
+    if leaf.is_empty() || name.is_empty() || WHITELIST.contains(&leaf.as_str()) {
+        return false;
+    }
+    if leaf != name {
+        let publisher = normalize(&app.publisher);
+        if publisher.is_empty() || leaf != publisher {
+            return false;
+        }
+        let prefix = install.to_string_lossy().to_lowercase();
+        let shared = installed.iter().any(|o| {
+            o.reg_key != app.reg_key
+                && !o.install_dir.is_empty()
+                && o.install_dir.to_lowercase().starts_with(&prefix)
+        });
+        if shared {
+            return false;
+        }
+    }
+    true
+}
+
 /// 定向扫描某软件的残留：安装目录、各程序数据根下匹配目录、卸载注册表键与厂商/产品键。
 pub fn scan_leftovers(app: &AppEntry, installed: &[AppEntry]) -> Vec<LeftoverItem> {
     let mut items = Vec::new();
@@ -182,7 +241,7 @@ pub fn scan_leftovers(app: &AppEntry, installed: &[AppEntry]) -> Vec<LeftoverIte
 
     let mut dirs: Vec<PathBuf> = Vec::new();
     let install = PathBuf::from(app.install_dir.trim_end_matches(['\\', '/']));
-    if !app.install_dir.is_empty() && install.is_dir() {
+    if !app.install_dir.is_empty() && install.is_dir() && install_dir_owned(app, installed, &install) {
         dirs.push(install);
     }
     for root in scan_roots() {
@@ -199,7 +258,7 @@ pub fn scan_leftovers(app: &AppEntry, installed: &[AppEntry]) -> Vec<LeftoverIte
             if others.iter().any(|o| o == &n) {
                 continue;
             }
-            if ids.iter().any(|id| id.contains(&n) || n.contains(id)) {
+            if ids.iter().any(|id| dir_matches(id, &n)) {
                 let p = entry.path();
                 if !dirs.contains(&p) {
                     dirs.push(p);
@@ -336,9 +395,10 @@ mod tests {
     fn leftover_scan_and_clean_roundtrip() {
         let hkcu = RegKey::predef(HKEY_CURRENT_USER);
         let base = std::env::temp_dir().join(format!("mwcleaner_untest_{}", std::process::id()));
+        let install = base.join("MWCleanerTestApp");
         let _ = fs::remove_dir_all(&base);
-        fs::create_dir_all(base.join("data")).unwrap();
-        fs::write(base.join("data\\a.bin"), vec![3u8; 4096]).unwrap();
+        fs::create_dir_all(install.join("data")).unwrap();
+        fs::write(install.join("data\\a.bin"), vec![3u8; 4096]).unwrap();
 
         // 自建卸载注册表项 + 厂商产品键
         let (uk, _) = hkcu.create_subkey(
@@ -346,13 +406,13 @@ mod tests {
         ).unwrap();
         uk.set_value("DisplayName", &"MWCleanerTestApp").unwrap();
         uk.set_value("UninstallString", &"cmd.exe /c exit 0").unwrap();
-        uk.set_value("InstallLocation", &base.to_string_lossy().to_string()).unwrap();
+        uk.set_value("InstallLocation", &install.to_string_lossy().to_string()).unwrap();
         let (pk, _) = hkcu.create_subkey("Software\\MWCleanerTestVendor\\MWCleanerTestApp").unwrap();
         pk.set_value("V", &"x").unwrap();
 
-        let app = test_app(&base);
+        let app = test_app(&install);
         let found = scan_leftovers(&app, &[app.clone()]);
-        let has_dir = found.iter().any(|i| i.kind == LeftoverKind::Dir && i.path == base.to_string_lossy());
+        let has_dir = found.iter().any(|i| i.kind == LeftoverKind::Dir && i.path == install.to_string_lossy());
         let has_uk = found.iter().any(|i| i.kind == LeftoverKind::Reg && i.path == app.reg_key);
         let has_pk = found.iter().any(|i| i.kind == LeftoverKind::Reg
             && i.path == "HKCU\\Software\\MWCleanerTestVendor\\MWCleanerTestApp");
@@ -362,7 +422,7 @@ mod tests {
         let report = clean(&selected, true);
         assert_eq!(report.failed, 0);
         assert!(report.freed >= 4096);
-        assert!(!base.exists());
+        assert!(!install.exists());
         assert!(report.backup.is_some());
         assert!(hkcu.open_subkey("Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\MWCleanerTestApp").is_err());
         assert!(hkcu.open_subkey("Software\\MWCleanerTestVendor").is_err());
@@ -387,5 +447,43 @@ mod tests {
             reg_key: String::new(),
         };
         assert_eq!(run_uninstaller(&app).unwrap(), 7);
+    }
+
+    #[test]
+    fn msi_install_token_only() {
+        assert_eq!(replace_msi_install_token("/I{GUID-123}"), "/X{GUID-123}");
+        assert_eq!(replace_msi_install_token("/i {GUID-123}"), "/X {GUID-123}");
+        assert_eq!(replace_msi_install_token("/qn /I{A}"), "/qn /X{A}");
+        assert_eq!(replace_msi_install_token("/INSTALLDIR=C:\\x"), "/INSTALLDIR=C:\\x");
+        assert_eq!(replace_msi_install_token("/i"), "/X");
+    }
+
+    #[test]
+    fn leftover_dir_match_no_substring_bleed() {
+        assert!(dir_matches("tencent", "tencent"));
+        assert!(dir_matches("appname", "appname12"));
+        assert!(!dir_matches("tencent", "tencentfiles"));
+        assert!(!dir_matches("wechat", "wechatfiles"));
+        assert!(!dir_matches("appname", "appnamefiles"));
+        assert!(!dir_matches("tencentfiles", "tencent"));
+        assert!(!dir_matches("qq", "qq"));
+    }
+
+    #[test]
+    fn install_dir_ownership_gate() {
+        let mut app = test_app(&PathBuf::from("C:\\Program Files\\MWCleanerTestApp"));
+        assert!(install_dir_owned(&app, &[], Path::new("C:\\Program Files\\MWCleanerTestApp")));
+        app.install_dir = "C:\\Program Files".into();
+        assert!(!install_dir_owned(&app, &[], Path::new("C:\\Program Files")));
+        app.install_dir = "C:\\Program Files\\MWCleanerTestVendor".into();
+        let other = AppEntry {
+            install_dir: "C:\\Program Files\\MWCleanerTestVendor\\Other".into(),
+            reg_key: "HKCU\\other".into(),
+            ..app.clone()
+        };
+        assert!(!install_dir_owned(&app, &[other], Path::new("C:\\Program Files\\MWCleanerTestVendor")));
+        assert!(install_dir_owned(&app, &[], Path::new("C:\\Program Files\\MWCleanerTestVendor")));
+        app.install_dir = "C:\\ProgramData\\Tencent Files".into();
+        assert!(!install_dir_owned(&app, &[], Path::new("C:\\ProgramData\\Tencent Files")));
     }
 }

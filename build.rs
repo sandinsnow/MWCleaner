@@ -4,8 +4,8 @@ fn main() {
         res.set_icon("assets/icon.ico");
         res.set("ProductName", "MWCleaner");
         res.set("FileDescription", "Windows 清理与优化工具");
-        res.set("ProductVersion", "0.4.0");
-        res.set("FileVersion", "0.4.0");
+        res.set("ProductVersion", env!("CARGO_PKG_VERSION"));
+        res.set("FileVersion", env!("CARGO_PKG_VERSION"));
         res.compile().expect("嵌入 Windows 资源失败");
     }
 }

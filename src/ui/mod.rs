@@ -66,7 +66,7 @@ impl RootView {
         Self {
             page: Page::Junk,
             junk: cx.new(|_| JunkPage::new()),
-            startup: cx.new(|_| StartupPage::new()),
+            startup: cx.new(|cx| StartupPage::new(cx)),
             services: cx.new(|cx| ServicesPage::new(cx)),
             registry: cx.new(|_| RegistryPage::new()),
             bigfiles: cx.new(|_| BigFilesPage::new()),
@@ -264,7 +264,7 @@ impl Render for RootView {
                             .pb_1()
                             .text_size(px(11.))
                             .text_color(theme::muted())
-                            .child("v0.4.0 · 单文件版"),
+                            .child(format!("v{} · 单文件版", env!("CARGO_PKG_VERSION"))),
                     ),
             )
             .child(div().flex_1().h_full().min_w_0().child(content))
