@@ -1,9 +1,7 @@
 use gpui::Rgba;
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 
-pub const MODE_DARK: u32 = 0;
-pub const MODE_LIGHT: u32 = 1;
-pub const MODE_SYSTEM: u32 = 2;
+pub use crate::core::settings::{MODE_DARK, MODE_LIGHT, MODE_SYSTEM};
 
 static MODE: AtomicU8 = AtomicU8::new(MODE_DARK as u8);
 static LIGHT: AtomicBool = AtomicBool::new(false);
@@ -42,6 +40,15 @@ fn apps_use_light_theme() -> bool {
 
 fn is_light() -> bool {
     LIGHT.load(Ordering::Relaxed)
+}
+
+/// 跟随系统模式下重读系统主题键；解析结果变化时返回 true（调用方负责重绘）。
+pub fn refresh_system() -> bool {
+    if mode() != MODE_SYSTEM {
+        return false;
+    }
+    let now = apps_use_light_theme();
+    LIGHT.swap(now, Ordering::Relaxed) != now
 }
 
 fn rgb(hex: u32) -> Rgba {

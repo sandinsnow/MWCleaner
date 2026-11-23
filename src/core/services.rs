@@ -89,38 +89,43 @@ impl AdviceCategory {
 pub struct Advice {
     pub category: AdviceCategory,
     pub reason: &'static str,
+    /// C2：批量应用建议的目标启动类型；0 = 该规则不参与批量（按需人工决定）
+    pub suggested: u32,
 }
 
 pub fn advice(name: &str) -> Advice {
-    let recommend = |reason: &'static str| Advice { category: AdviceCategory::Recommend, reason };
-    let caution = |reason: &'static str| Advice { category: AdviceCategory::Caution, reason };
+    // C2：suggested 语义——4=可禁用类参与批量禁用；3=可改手动类参与批量改手动；
+    // 0=不参与批量（WSearch 作者本意按需选择；Keep/Caution 全部为安全红线）
+    let disable = |reason: &'static str| Advice { category: AdviceCategory::Recommend, reason, suggested: 4 };
+    let manual = |reason: &'static str| Advice { category: AdviceCategory::Recommend, reason, suggested: 3 };
+    let caution = |reason: &'static str| Advice { category: AdviceCategory::Caution, reason, suggested: 0 };
     match name {
-        "DiagTrack" => recommend("遥测数据收集，可禁用以减少后台上传"),
-        "dmwappushservice" => recommend("WAP 推送消息路由，个人电脑通常无用"),
-        "Fax" => recommend("传真服务，无传真设备可禁用"),
-        "RemoteRegistry" => recommend("远程注册表访问，建议禁用以降低攻击面"),
-        "MapsBroker" => recommend("离线地图管理，不用离线地图可禁用"),
-        "lfsvc" => recommend("地理位置服务，不用定位可禁用"),
-        "WalletService" => recommend("钱包服务，极少使用"),
-        "RetailDemo" => recommend("零售演示模式，个人电脑无用"),
-        "WMPNetworkSvc" => recommend("媒体播放器网络共享，通常无用"),
-        "XblAuthManager" | "XblGameSave" | "XboxNetApiSvc" => recommend("Xbox 相关，不玩 Xbox 游戏可禁用"),
-        "TabletInputService" => recommend("触摸键盘/手写面板，无触摸屏可禁用"),
-        "Spooler" => recommend("打印后台处理，无打印机可禁用（有漏洞史）"),
-        "SysMain" => recommend("预读取加速，SSD 上收益有限，可改手动"),
-        "WSearch" => recommend("搜索索引，禁用后文件搜索变慢，按需选择"),
-        "WerSvc" => recommend("错误报告上传，可改手动"),
-        "SharedAccess" => recommend("Internet 连接共享，不做热点/共享可禁用"),
-        "wisvc" => recommend("Windows Insider 服务，非预览用户可禁用"),
-        "WbioSrvc" => recommend("生物识别框架，不用指纹/面部登录可禁用"),
-        "icssvc" => recommend("移动热点服务，不用热点可禁用"),
-        "LanmanServer" => recommend("文件/打印共享服务端，不做共享可禁用（有漏洞史）"),
-        "PcaSvc" => recommend("程序兼容助手弹窗，可改手动"),
-        "SCardSvr" => recommend("智能卡服务，无智能卡可禁用"),
-        "SessionEnv" | "TermService" => recommend("远程桌面相关，不用远程桌面可禁用"),
-        "ShellHWDetection" => recommend("自动播放服务，禁用以降低自动运行风险"),
-        "WebClient" => recommend("WebDAV 客户端，不用可禁用（有漏洞史）"),
-        "WinHttpAutoProxySvc" => recommend("WPAD 代理自动发现，可改手动（有漏洞史）"),
+        "DiagTrack" => disable("遥测数据收集，可禁用以减少后台上传"),
+        "dmwappushservice" => disable("WAP 推送消息路由，个人电脑通常无用"),
+        "Fax" => disable("传真服务，无传真设备可禁用"),
+        "RemoteRegistry" => disable("远程注册表访问，建议禁用以降低攻击面"),
+        "MapsBroker" => disable("离线地图管理，不用离线地图可禁用"),
+        "lfsvc" => disable("地理位置服务，不用定位可禁用"),
+        "WalletService" => disable("钱包服务，极少使用"),
+        "RetailDemo" => disable("零售演示模式，个人电脑无用"),
+        "WMPNetworkSvc" => disable("媒体播放器网络共享，通常无用"),
+        "XblAuthManager" | "XblGameSave" | "XboxNetApiSvc" => disable("Xbox 相关，不玩 Xbox 游戏可禁用"),
+        "TabletInputService" => disable("触摸键盘/手写面板，无触摸屏可禁用"),
+        "Spooler" => disable("打印后台处理，无打印机可禁用（有漏洞史）"),
+        "SysMain" => manual("预读取加速，SSD 上收益有限，可改手动"),
+        "WSearch" => Advice { category: AdviceCategory::Recommend, reason: "搜索索引，禁用后文件搜索变慢，按需选择", suggested: 0 },
+        "WerSvc" => manual("错误报告上传，可改手动"),
+        "SharedAccess" => disable("Internet 连接共享，不做热点/共享可禁用"),
+        "wisvc" => disable("Windows Insider 服务，非预览用户可禁用"),
+        "WbioSrvc" => disable("生物识别框架，不用指纹/面部登录可禁用"),
+        "icssvc" => disable("移动热点服务，不用热点可禁用"),
+        "LanmanServer" => disable("文件/打印共享服务端，不做共享可禁用（有漏洞史）"),
+        "PcaSvc" => manual("程序兼容助手弹窗，可改手动"),
+        "SCardSvr" => disable("智能卡服务，无智能卡可禁用"),
+        "SessionEnv" | "TermService" => disable("远程桌面相关，不用远程桌面可禁用"),
+        "ShellHWDetection" => disable("自动播放服务，禁用以降低自动运行风险"),
+        "WebClient" => disable("WebDAV 客户端，不用可禁用（有漏洞史）"),
+        "WinHttpAutoProxySvc" => manual("WPAD 代理自动发现，可改手动（有漏洞史）"),
         "RpcSs" | "RpcEptMapper" | "DcomLaunch" => caution("COM/RPC 基础组件，大量系统功能依赖，禁用会导致系统异常"),
         "Power" => caution("电源策略管理，禁用影响电源与性能调度"),
         "PlugPlay" => caution("即插即用设备枚举，禁用后硬件无法识别"),
@@ -161,7 +166,7 @@ pub fn advice(name: &str) -> Advice {
             if PER_USER.iter().any(|p| name.starts_with(p)) {
                 return caution("每用户同步/通知组件，禁用影响邮件、日历与通知同步");
             }
-            Advice { category: AdviceCategory::Keep, reason: "" }
+            Advice { category: AdviceCategory::Keep, reason: "", suggested: 0 }
         }
     }
 }
@@ -304,5 +309,178 @@ pub fn set_start_type(name: &str, start_type: u32) -> Result<(), String> {
         let _ = CloseServiceHandle(svc);
         let _ = CloseServiceHandle(scm);
         r.map_err(|e| format!("修改服务 {name} 失败: {e}"))
+    }
+}
+
+// ===== C2：服务批量应用建议优化 =====
+
+/// C2：逐项执行结果（display 名 + 成败）
+pub struct BatchItemResult {
+    /// 服务键名（用于回查列表行）
+    pub name: String,
+    pub display: String,
+    pub target: u32,
+    pub err: Option<String>,
+}
+
+/// C2：批量候选筛选。安全红线四条：
+/// ① 只取 advice.category == Recommend 且 suggested != 0 的服务；
+/// ② 当前 start_type 已是目标类型的不列；
+/// ③ start_type ∈ {2,3,4} 之外（引导 0/系统 1）绝不触碰——SCM 语义特殊；
+/// ④ 已有 undo 记录 = 用户手动改过，尊重既有操作，排除。
+pub fn batch_candidates(services: &[ServiceInfo]) -> Vec<(usize, u32)> {
+    batch_candidates_filtered(services, &|n| original_start_type(n).is_some())
+}
+
+/// 可注入 undo 判定的内部变体（纯函数，便于单测）。
+fn batch_candidates_filtered(services: &[ServiceInfo], has_undo: &dyn Fn(&str) -> bool) -> Vec<(usize, u32)> {
+    services
+        .iter()
+        .enumerate()
+        .filter_map(|(i, s)| {
+            let adv = advice(&s.name);
+            if adv.category != AdviceCategory::Recommend || adv.suggested == 0 {
+                return None; // 红线①：仅 Recommend 且参与批量
+            }
+            if s.start_type == adv.suggested {
+                return None; // 红线②：已是目标状态
+            }
+            if !matches!(s.start_type, 2 | 3 | 4) {
+                return None; // 红线③：引导/系统启动类型绝不触碰
+            }
+            if has_undo(&s.name) {
+                return None; // 红线④：用户手动改过，尊重既有操作
+            }
+            Some((i, adv.suggested))
+        })
+        .collect()
+}
+
+// ===== C3：服务依赖警告 =====
+
+/// C3：枚举仍处于运行中的依赖服务显示名。查询失败返回 Err（调用方按「未能确认依赖」降级）。
+/// 仿 query_config 双调用 + ERROR_MORE_DATA 扩容模式：
+/// OpenSCManagerW(SC_MANAGER_CONNECT) → OpenServiceW(SERVICE_ENUMERATE_DEPENDENTS)
+/// → EnumDependentServicesW(svc, SERVICE_ACTIVE, ...) 循环扩容
+/// → 读 ENUM_SERVICE_STATUSW.lpDisplayName（resolve_indirect 解 @ 引用）
+pub fn active_dependents(name: &str) -> Result<Vec<String>, String> {
+    unsafe {
+        let scm = OpenSCManagerW(PCWSTR::null(), PCWSTR::null(), SC_MANAGER_CONNECT)
+            .map_err(|e| format!("打开服务管理器失败: {e}"))?;
+        let wide = to_wide(name);
+        let svc = match OpenServiceW(scm, PCWSTR(wide.as_ptr()), SERVICE_ENUMERATE_DEPENDENTS) {
+            Ok(s) => s,
+            Err(e) => {
+                let _ = CloseServiceHandle(scm);
+                return Err(format!("打开服务 {name} 失败: {e}"));
+            }
+        };
+        let mut buf: Vec<u64> = vec![0; 16 * 1024];
+        let mut needed = 0u32;
+        let mut count = 0u32;
+        loop {
+            let r = EnumDependentServicesW(
+                svc,
+                SERVICE_ACTIVE,
+                Some(buf.as_mut_ptr() as *mut ENUM_SERVICE_STATUSW),
+                (buf.len() * 8) as u32,
+                &mut needed,
+                &mut count,
+            );
+            match r {
+                Ok(()) => break,
+                Err(e) if e.code() == ERROR_MORE_DATA.to_hresult() => {
+                    buf.resize((needed as usize + 4096 + 7) / 8, 0);
+                }
+                Err(e) => {
+                    let _ = CloseServiceHandle(svc);
+                    let _ = CloseServiceHandle(scm);
+                    return Err(format!("枚举依赖失败: {e}"));
+                }
+            }
+        }
+        // SERVICE_ACTIVE 过滤后仅含运行中的依赖服务，直接收集显示名
+        let statuses =
+            std::slice::from_raw_parts(buf.as_ptr() as *const ENUM_SERVICE_STATUSW, count as usize);
+        let mut out: Vec<String> = statuses
+            .iter()
+            .map(|s| resolve_indirect(&pwstr_to_string(s.lpDisplayName)))
+            .collect();
+        let _ = CloseServiceHandle(svc);
+        let _ = CloseServiceHandle(scm);
+        out.sort_by(|a, b| a.to_lowercase().cmp(&b.to_lowercase()));
+        Ok(out)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn svc(name: &str, start_type: u32) -> ServiceInfo {
+        ServiceInfo {
+            name: name.into(),
+            display: name.into(),
+            description: String::new(),
+            binary: String::new(),
+            state: 1,
+            start_type,
+        }
+    }
+
+    #[test]
+    fn advice_suggested_targets() {
+        // 可禁用类 → 4
+        for n in [
+            "DiagTrack", "Fax", "RemoteRegistry", "Spooler", "XblAuthManager",
+            "LanmanServer", "SessionEnv", "TermService", "WebClient", "icssvc",
+        ] {
+            assert_eq!(advice(n).suggested, 4, "{n} 应为禁用目标");
+        }
+        // 可改手动类 → 3
+        for n in ["SysMain", "PcaSvc", "WerSvc", "WinHttpAutoProxySvc"] {
+            assert_eq!(advice(n).suggested, 3, "{n} 应为手动目标");
+        }
+        // WSearch：作者本意按需选择 → 0 不参与批量
+        assert_eq!(advice("WSearch").suggested, 0);
+        // Keep / Caution 全部 → 0
+        assert_eq!(advice("RpcSs").suggested, 0);
+        assert_eq!(advice("Power").suggested, 0);
+        assert_eq!(advice("wuauserv").suggested, 0);
+        assert_eq!(advice("UnknownSvc").suggested, 0);
+        assert_eq!(advice("UserDataSvc_abc").suggested, 0);
+    }
+
+    #[test]
+    fn batch_candidates_rules() {
+        // 注入式 undo 判定：只有 "Fax" 视为已有 undo 记录
+        let has_undo = |n: &str| n == "Fax";
+        let list = vec![
+            svc("Fax", 2),           // Recommend/4，但有 undo → 排除（红线④）
+            svc("DiagTrack", 2),     // Recommend/4 → 命中
+            svc("DiagTrack", 4),     // 已是目标 → 排除（红线②）
+            svc("SysMain", 2),       // Recommend/3 → 命中 target=3
+            svc("SysMain", 3),       // 已是目标 → 排除
+            svc("WSearch", 2),       // suggested=0 → 排除
+            svc("RpcSs", 2),         // Caution → 排除（红线①）
+            svc("UnknownSvc", 2),    // Keep → 排除
+            svc("Spooler", 1),       // 系统启动类型 → 排除（红线③）
+            svc("Spooler", 0),       // 引导启动类型 → 排除（红线③）
+        ];
+        let got = batch_candidates_filtered(&list, &has_undo);
+        assert_eq!(got, vec![(1, 4), (3, 3)]);
+        // start_type ∈ {2,3,4} 正常命中：已是禁用态不再列；手动态禁用建议照样命中
+        let ok = vec![svc("DiagTrack", 4)];
+        assert!(batch_candidates_filtered(&ok, &|_| false).is_empty());
+        let ok2 = vec![svc("DiagTrack", 3)];
+        assert_eq!(batch_candidates_filtered(&ok2, &|_| false), vec![(0, 4)]);
+    }
+
+    #[test]
+    fn active_dependents_smoke() {
+        // RpcSs 调用不 panic 即可（其 ACL 可能拒绝标准用户枚举，成败依环境而定）
+        let _ = active_dependents("RpcSs");
+        // 不存在的服务 → Err（ERROR_SERVICE_DOES_NOT_EXIST，无需任何特权）
+        assert!(active_dependents("__mw_no_such_service__").is_err());
     }
 }

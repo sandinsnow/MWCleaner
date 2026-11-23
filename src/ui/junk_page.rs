@@ -2,10 +2,11 @@ use gpui::*;
 use gpui::prelude::*;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::time::Instant;
 
 use crate::core::junk::{self, CleanResult, JunkCategory};
 use crate::core::settings;
-use crate::ui::{button, chart_color, checkbox, danger_button, dot, page_header, progress_bar, pump, size_bar, stacked_bar, theme};
+use crate::ui::{button, chart_color, checkbox, danger_button, dot, empty_state, page_header, progress_bar, pump, size_bar, stacked_bar, start_status_ticker, theme, ArmedConfirm, STATUS_TTL};
 
 enum Msg {
     ScanProgress(u64, usize, usize, String),
@@ -28,24 +29,28 @@ pub struct JunkPage {
     cats: Vec<JunkCategory>,
     progress: (usize, usize, String),
     result: Option<CleanResult>,
-    armed: bool,
+    armed: ArmedConfirm<()>,
     cancel: Option<Arc<AtomicBool>>,
     cancelled: bool,
     gen: u64,
+    done_at: Option<Instant>,
 }
 
 impl JunkPage {
-    pub fn new() -> Self {
-        Self {
+    pub fn new(cx: &mut Context<Self>) -> Self {
+        let this = Self {
             phase: Phase::Idle,
             cats: Vec::new(),
             progress: (0, 1, String::new()),
             result: None,
-            armed: false,
+            armed: ArmedConfirm::new(),
             cancel: None,
             cancelled: false,
             gen: 0,
-        }
+            done_at: None,
+        };
+        start_status_ticker(cx);
+        this
     }
 
     fn busy(&self) -> bool {
@@ -55,8 +60,9 @@ impl JunkPage {
     fn start_scan(&mut self, cx: &mut Context<Self>) {
         self.phase = Phase::Scanning;
         self.result = None;
-        self.armed = false;
+        self.armed.reset();
         self.cancelled = false;
+        self.done_at = None;
         self.gen += 1;
         let gen = self.gen;
         let cancel = Arc::new(AtomicBool::new(false));
@@ -92,10 +98,11 @@ impl JunkPage {
         );
     }
 
-    fn start_clean(&mut self, cx: &mut Context<Self>) {
+    fn start_clean(&mut self, owner_hwnd: isize, cx: &mut Context<Self>) {
         self.phase = Phase::Cleaning;
-        self.armed = false;
+        self.armed.reset();
         self.cancelled = false;
+        self.done_at = None;
         self.gen += 1;
         let gen = self.gen;
         let cancel = Arc::new(AtomicBool::new(false));
@@ -113,6 +120,7 @@ impl JunkPage {
                     },
                     to_recycle,
                     &cancel,
+                    owner_hwnd,
                 );
                 let _ = tx.try_send(Msg::Cleaned(gen, r));
             },
@@ -123,6 +131,7 @@ impl JunkPage {
                         this.cancel = None;
                         this.result = Some(r);
                         this.phase = Phase::Done;
+                        this.done_at = Some(Instant::now());
                     }
                     _ => {}
                 }
@@ -130,7 +139,6 @@ impl JunkPage {
             },
         );
     }
-
 }
 
 impl Render for JunkPage {
@@ -140,6 +148,10 @@ impl Render for JunkPage {
         let has_selection = self.cats.iter().any(|c| c.selected && c.size > 0);
         let can_clean = (self.phase == Phase::Scanned || self.phase == Phase::Done) && has_selection;
         let max_size = self.cats.iter().map(|c| c.size).max().unwrap_or(1);
+        // SEC-2：勾选回收站类别意味着永久清空，需要显式强提示。
+        let has_recycle_selected = self.cats.iter().any(|c| c.recycle_bin && c.selected);
+        // C6：勾选升级残留意味着强制直删且无法回退旧系统，独立红字警示（两者可并列）。
+        let has_upgrade_selected = self.cats.iter().any(|c| c.upgrade_remnant && c.selected);
 
         let rows = self.cats.iter().enumerate().map(|(i, cat)| {
             let size = crate::core::fmt_size(cat.size);
@@ -153,7 +165,7 @@ impl Render for JunkPage {
                 .bg(theme::panel())
                 .child(checkbox(SharedString::from(format!("junk-chk-{i}")), cat.selected, cx.listener(move |this, _, _, cx| {
                     this.cats[i].selected = !this.cats[i].selected;
-                    this.armed = false;
+                    this.armed.reset();
                     cx.notify();
                 })))
                 .child(
@@ -200,24 +212,39 @@ impl Render for JunkPage {
             .into(),
             Phase::Cleaning => format!("正在清理：{}", self.progress.2).into(),
             Phase::Done => {
-                let r = self.result.as_ref().unwrap();
-                let head = if r.cancelled { "清理已取消：" } else { "清理完成：" };
-                if r.recycled {
-                    format!(
-                        "{head}{} 已移入回收站，{} 项被占用或无权限已跳过",
-                        crate::core::fmt_size(r.freed),
-                        r.failed
-                    )
-                    .into()
+                // B6：完成结果 8 秒后自动回落为简短提示，不永久占用状态栏。
+                if self.done_at.map_or(true, |t| t.elapsed() >= STATUS_TTL) {
+                    "清理完成，点击「扫描」可重新分析".into()
                 } else {
-                    format!(
-                        "{head}释放 {}，{} 个文件被占用或无权限已跳过",
-                        crate::core::fmt_size(r.freed),
-                        r.failed
-                    )
-                    .into()
+                    // COR-3/口径区分：freed=已真正释放（直删/清空回收站），recycled_bytes=移入回收站暂未释放
+                    let r = self.result.as_ref().unwrap();
+                    let mut parts: Vec<String> = Vec::new();
+                    if r.freed > 0 {
+                        parts.push(format!("已永久释放 {}", crate::core::fmt_size(r.freed)));
+                    }
+                    if r.recycled_bytes > 0 {
+                        parts.push(format!(
+                            "移入回收站 {}（清空回收站后释放）",
+                            crate::core::fmt_size(r.recycled_bytes)
+                        ));
+                    }
+                    let tail = if parts.is_empty() { "无已清理项".to_string() } else { parts.join("，") };
+                    if r.cancelled {
+                        format!("已取消清理：{tail}，其余项保留在磁盘").into()
+                    } else if r.failed > 0 {
+                        format!("清理完成：{tail}，{} 项被占用或无权限已跳过", r.failed).into()
+                    } else {
+                        format!("清理完成：{tail}").into()
+                    }
                 }
             }
+        };
+
+        let empty_text = match &self.phase {
+            Phase::Scanning => "正在扫描…",
+            Phase::Cleaning => "正在清理…",
+            Phase::Scanned | Phase::Done => "未发现可清理的垃圾文件",
+            Phase::Idle => if self.cancelled { "扫描已取消，点击「扫描」重新开始" } else { "点击「扫描」分析可清理的垃圾文件" },
         };
 
         div().flex().flex_col()
@@ -244,18 +271,30 @@ impl Render for JunkPage {
                             cx.notify();
                         })))
                     })
-                    .child(danger_button("junk-clean", 
-                        if self.armed { "再次点击确认清理" } else { "清理勾选项" },
+                    .child(danger_button("junk-clean",
+                        if self.armed.any() {
+                            if has_upgrade_selected {
+                                // C6：升级残留警示文案优先（强制直删、不可恢复）
+                                "确认：永久删除 Windows 升级残留"
+                            } else if has_recycle_selected { "确认：将永久清空回收站" } else { "再次点击确认清理" }
+                        } else { "清理勾选项" },
                         can_clean,
-                        cx.listener(|this, _, _, cx| {
-                            if this.armed {
-                                this.start_clean(cx);
+                        cx.listener(|this, _, window, cx| {
+                            if this.armed.click(()) {
+                                this.start_clean(super::controls::window_hwnd(window), cx);
                             } else {
-                                this.armed = true;
                                 cx.notify();
                             }
                         }),
                     ))
+                    .when(has_upgrade_selected, |d| {
+                        d.child(div().text_size(px(11.)).text_color(theme::danger())
+                            .child("警告：Windows 升级残留删除后无法回退到旧版 Windows，且不经过回收站，不可恢复"))
+                    })
+                    .when(has_recycle_selected, |d| {
+                        d.child(div().text_size(px(11.)).text_color(theme::danger())
+                            .child("警告：已勾选「回收站」，清理将永久清空回收站，不可恢复"))
+                    })
                     .child(div().flex_1().min_w_0().text_right().text_size(px(13.)).text_color(theme::muted()).truncate().child(status)),
             )
             .when(self.busy(), |d| {
@@ -276,7 +315,8 @@ impl Render for JunkPage {
                     .min_h_0()
                     .gap_2()
                     .id("junk-list").overflow_y_scroll()
-                    .children(rows),
+                    .children(rows)
+                    .when(self.cats.is_empty(), move |d| d.child(empty_state(empty_text))),
             )
     }
 }

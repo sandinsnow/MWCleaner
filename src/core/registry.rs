@@ -11,7 +11,7 @@ use super::app_data_dir;
 
 /// 保守判缺失：先展开 %env%；相对路径与访问错误一律视为"存在"，避免误删有效项。
 fn path_missing(raw: &str) -> bool {
-    let expanded = super::startup::expand_env(raw);
+    let expanded = super::expand_env(raw);
     let p = Path::new(&expanded);
     if !p.is_absolute() {
         return false;

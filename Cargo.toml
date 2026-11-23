@@ -1,6 +1,6 @@
 [package]
 name = "mwcleaner"
-version = "0.4.1"
+version = "0.5.0"
 edition = "2021"
 
 [dependencies]
@@ -9,6 +9,8 @@ smol = "2"
 winreg = "0.55"
 image = { version = "0.25", default-features = false }
 serde_json = "1"
+# SEC-3：仅引用 trait 获取窗口 HWND，与 gpui 内部同版本，无新框架
+raw-window-handle = "0.6"
 
 [dependencies.windows]
 version = "0.58"
@@ -16,6 +18,8 @@ features = [
     "Win32_Foundation",
     "Win32_System_Com",
     "Win32_System_Services",
+    # C4：Task Scheduler 2.0 COM（ITaskService），计划任务自启源
+    "Win32_System_TaskScheduler",
     "Win32_UI_Shell",
     "Win32_Storage_FileSystem",
     "Win32_Graphics_Gdi",

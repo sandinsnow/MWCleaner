@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use crate::core::registry::{self, CleanOutcome, RegIssue};
-use crate::ui::{button, checkbox, danger_button, page_header, pump, theme};
+use crate::ui::{button, checkbox, danger_button, empty_state, open_in_explorer, page_header, pump, start_status_ticker, theme, ArmedConfirm, Status};
 
 enum Msg {
     Scanned(u64, Vec<RegIssue>),
@@ -24,8 +24,8 @@ enum Phase {
 pub struct RegistryPage {
     phase: Phase,
     issues: Vec<RegIssue>,
-    status: SharedString,
-    armed: bool,
+    status: Status,
+    armed: ArmedConfirm<()>,
     cancel: Option<Arc<AtomicBool>>,
     cancelled: bool,
     scan_gen: u64,
@@ -51,29 +51,22 @@ fn latest_backup() -> Option<PathBuf> {
     v.pop()
 }
 
-fn open_backups(select: Option<PathBuf>) {
-    let dir = backups_dir();
-    let _ = std::fs::create_dir_all(&dir);
-    let mut cmd = std::process::Command::new("explorer.exe");
-    match select {
-        Some(p) => cmd.arg(format!("/select,{}", p.display())),
-        None => cmd.arg(dir),
-    };
-    let _ = cmd.spawn();
-}
-
 impl RegistryPage {
-    pub fn new() -> Self {
-        Self {
+    const DEFAULT_STATUS: &'static str = "扫描无效卸载项、缺失 DLL 引用与无效 App Paths";
+
+    pub fn new(cx: &mut Context<Self>) -> Self {
+        let this = Self {
             phase: Phase::Idle,
             issues: Vec::new(),
-            status: "扫描无效卸载项、缺失 DLL 引用与无效 App Paths".into(),
-            armed: false,
+            status: Status::new(),
+            armed: ArmedConfirm::new(),
             cancel: None,
             cancelled: false,
             scan_gen: 0,
             last_backup: None,
-        }
+        };
+        start_status_ticker(cx);
+        this
     }
 
     fn busy(&self) -> bool {
@@ -82,7 +75,7 @@ impl RegistryPage {
 
     fn start_scan(&mut self, cx: &mut Context<Self>) {
         self.phase = Phase::Scanning;
-        self.armed = false;
+        self.armed.reset();
         self.cancelled = false;
         self.scan_gen += 1;
         let gen = self.scan_gen;
@@ -102,9 +95,9 @@ impl RegistryPage {
                     this.cancel = None;
                     if this.cancelled {
                         this.phase = Phase::Idle;
-                        this.status = "扫描已取消".into();
+                        this.status.set("扫描已取消");
                     } else {
-                        this.status = format!("发现 {} 个可疑项", issues.len()).into();
+                        this.status.set(format!("发现 {} 个可疑项", issues.len()));
                         this.issues = issues;
                         this.phase = Phase::Scanned;
                     }
@@ -116,7 +109,7 @@ impl RegistryPage {
 
     fn start_clean(&mut self, cx: &mut Context<Self>) {
         self.phase = Phase::Cleaning;
-        self.armed = false;
+        self.armed.reset();
         cx.notify();
         let issues = self.issues.clone();
         pump(
@@ -128,16 +121,15 @@ impl RegistryPage {
                 if let Msg::Cleaned(r) = msg {
                     match r {
                         Ok(o) => {
-                            this.status = format!(
+                            this.status.set(format!(
                                 "已删除 {} 项，失败 {} 项；备份：{}",
                                 o.deleted,
                                 o.failed,
                                 o.backup.display()
-                            )
-                            .into();
+                            ));
                             this.last_backup = Some(o.backup);
                         }
-                        Err(e) => this.status = e.into(),
+                        Err(e) => this.status.set(e),
                     }
                     this.phase = Phase::Done;
                 }
@@ -162,7 +154,7 @@ impl Render for RegistryPage {
                 .bg(theme::panel())
                 .child(checkbox(SharedString::from(format!("reg-chk-{i}")), issue.selected, cx.listener(move |this, _, _, cx| {
                     this.issues[i].selected = !this.issues[i].selected;
-                    this.armed = false;
+                    this.armed.reset();
                     cx.notify();
                 })))
                 .child(
@@ -182,6 +174,7 @@ impl Render for RegistryPage {
                 )
         });
 
+        let status_text = self.status.view(Self::DEFAULT_STATUS);
         let status_el = match self.last_backup.clone() {
             Some(p) => div()
                 .id("reg-backup-link")
@@ -192,8 +185,12 @@ impl Render for RegistryPage {
                 .text_color(theme::accent())
                 .truncate()
                 .cursor_pointer()
-                .on_click(cx.listener(move |_, _, _, _| open_backups(Some(p.clone()))))
-                .child(self.status.clone())
+                .focusable()
+                .focus(|s| s.text_color(theme::accent_hover()))
+                .on_click(cx.listener(move |_, _, _, _| {
+                    open_in_explorer(&backups_dir(), Some(p.as_path()));
+                }))
+                .child(status_text)
                 .into_any_element(),
             None => div()
                 .flex_1()
@@ -202,8 +199,15 @@ impl Render for RegistryPage {
                 .text_size(px(12.))
                 .text_color(theme::muted())
                 .truncate()
-                .child(self.status.clone())
+                .child(status_text)
                 .into_any_element(),
+        };
+
+        let empty_text = match &self.phase {
+            Phase::Scanning => "正在扫描…",
+            Phase::Cleaning => "正在清理…",
+            Phase::Scanned | Phase::Done => "未发现可疑注册表项",
+            Phase::Idle => if self.cancelled { "扫描已取消，点击「扫描」重新开始" } else { "点击「扫描」检查无效卸载项与 DLL 引用" },
         };
 
         div().flex().flex_col()
@@ -225,24 +229,23 @@ impl Render for RegistryPage {
                             }
                             this.cancelled = true;
                             this.phase = Phase::Idle;
-                            this.status = "扫描已取消".into();
+                            this.status.set("扫描已取消");
                             cx.notify();
                         })))
                     })
                     .child(danger_button("reg-clean",
-                        if self.armed { "再次点击确认清理" } else { "清理勾选项" },
+                        if self.armed.any() { "再次点击确认清理" } else { "清理勾选项" },
                         can_clean,
                         cx.listener(|this, _, _, cx| {
-                            if this.armed {
+                            if this.armed.click(()) {
                                 this.start_clean(cx);
                             } else {
-                                this.armed = true;
                                 cx.notify();
                             }
                         }),
                     ))
                     .child(button("reg-backups", "打开备份目录", false, true, cx.listener(|_, _, _, _| {
-                        open_backups(latest_backup());
+                        open_in_explorer(&backups_dir(), latest_backup().as_deref());
                     })))
                     .child(
                         div()
@@ -266,7 +269,8 @@ impl Render for RegistryPage {
                     .min_h_0()
                     .gap_2()
                     .id("reg-list").overflow_y_scroll()
-                    .children(rows),
+                    .children(rows)
+                    .when(self.issues.is_empty(), move |d| d.child(empty_state(empty_text))),
             )
     }
 }

@@ -2,7 +2,7 @@ use gpui::*;
 use gpui::prelude::*;
 
 use crate::core::update::{self, ReleaseInfo};
-use crate::ui::{badge, brand_icon, button, dot, page_header, pump, theme};
+use crate::ui::{badge, brand_icon, button, dot, page_header, pump, theme, transparent};
 
 enum Msg {
     Done(Result<ReleaseInfo, String>),
@@ -282,7 +282,11 @@ impl Render for AboutPage {
                             .px_3()
                             .py_2()
                             .rounded(px(8.))
+                            .border_1()
+                            .border_color(transparent())
                             .cursor_pointer()
+                            .focusable()
+                            .focus(|s| s.border_color(theme::accent()))
                             .hover(|s| s.bg(theme::panel_hover()))
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 if open_url(url) {

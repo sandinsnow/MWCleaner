@@ -322,7 +322,7 @@ pub struct CleanReport {
     pub backup: Option<PathBuf>,
 }
 
-pub fn clean(items: &[LeftoverItem], to_recycle: bool) -> CleanReport {
+pub fn clean(items: &[LeftoverItem], to_recycle: bool, owner_hwnd: isize) -> CleanReport {
     let mut freed = 0u64;
     let mut failed = 0usize;
     let mut regs = Vec::new();
@@ -331,7 +331,7 @@ pub fn clean(items: &[LeftoverItem], to_recycle: bool) -> CleanReport {
             LeftoverKind::Dir => {
                 let p = PathBuf::from(&item.path);
                 let ok = if to_recycle {
-                    (unsafe { super::junk::recycle_paths(&[p.clone()]) }) && !p.exists()
+                    super::junk::move_to_recycle_bin(owner_hwnd, &[p.clone()]) && !p.exists()
                 } else {
                     fs::remove_dir_all(&p).is_ok()
                 };
@@ -419,7 +419,7 @@ mod tests {
         assert!(has_dir && has_uk && has_pk, "found: {:?}", found.iter().map(|i| &i.path).collect::<Vec<_>>());
 
         let selected: Vec<LeftoverItem> = found.into_iter().map(|mut i| { i.selected = true; i }).collect();
-        let report = clean(&selected, true);
+        let report = clean(&selected, true, 0);
         assert_eq!(report.failed, 0);
         assert!(report.freed >= 4096);
         assert!(!install.exists());

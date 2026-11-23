@@ -17,7 +17,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     DestroyIcon, GetIconInfo, PrivateExtractIconsW, HICON, ICONINFO,
 };
 
-use crate::core::startup::{exe_path, expand_env};
+use crate::core::{exe_path, expand_env};
 use crate::ui::theme;
 
 fn cache() -> &'static Mutex<HashMap<String, Option<Arc<RenderImage>>>> {
@@ -222,12 +222,15 @@ fn extract(path: &PathBuf, index: i32) -> Option<Arc<RenderImage>> {
 
 fn lookup(path: PathBuf, index: i32) -> Option<Arc<RenderImage>> {
     let key = format!("{}#{index}", path.to_string_lossy().to_lowercase());
-    let mut map = cache().lock().ok()?;
-    if let Some(v) = map.get(&key) {
+    // CON-2：第一重检查只持有锁读取缓存，命中即返回，不触发慢速 GDI 提取。
+    if let Some(v) = cache().lock().ok()?.get(&key) {
         return v.clone();
     }
+    // 解锁后再执行慢速 extract，避免持锁阻塞渲染线程；写完立即释放锁。
     let v = extract(&path, index);
-    map.insert(key, v.clone());
+    if let Ok(mut map) = cache().lock() {
+        map.insert(key, v.clone());
+    }
     v
 }
 
