@@ -87,38 +87,135 @@ pub fn dir_size_cancelled(root: &Path, cancel: &AtomicBool) -> (u64, u64, bool) 
     (size, count, false)
 }
 
-pub fn delete_contents(root: &Path) -> (u64, u64) {
-    let mut freed = 0u64;
-    let mut failed = 0u64;
-    let Ok(entries) = fs::read_dir(root) else {
-        return (0, 0);
+/// 垃圾清理失败分类：区分无权限 / 被占用 / 只读 / 其他，供 UI 给出针对性指引。
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum FailKind {
+    /// 无权限（ERROR_ACCESS_DENIED，系统保护文件，管理员通常也无权）
+    Denied,
+    /// 被其他程序占用（ERROR_SHARING_VIOLATION / ERROR_LOCK_VIOLATION）
+    Locked,
+    /// 只读属性且清除失败
+    ReadOnly,
+    /// 其他原因（Shell 拒绝、路径失效等）
+    Other,
+}
+
+/// 失败明细只保留前 20 条（控制内存），总量仍由计数器完整统计。
+pub const MAX_FAILURE_DETAILS: usize = 20;
+
+/// 纯函数分类：只读属性优先归类；5=无权限，32/33=被占用，其余=其他。
+pub fn classify_delete_error(err: &std::io::Error, readonly_attr: bool) -> FailKind {
+    if readonly_attr {
+        return FailKind::ReadOnly;
+    }
+    match err.raw_os_error() {
+        Some(5) => FailKind::Denied,
+        Some(32) | Some(33) => FailKind::Locked,
+        _ => FailKind::Other,
+    }
+}
+
+/// 一次清理的失败/释放聚合统计：计数不设上限，明细只留前 MAX_FAILURE_DETAILS 条。
+#[derive(Default, Clone, Debug)]
+pub struct DeleteStats {
+    pub freed: u64,
+    pub failed: u64,
+    pub denied: u64,
+    pub locked: u64,
+    pub readonly: u64,
+    pub other: u64,
+    pub details: Vec<(PathBuf, FailKind)>,
+}
+
+impl DeleteStats {
+    fn record(&mut self, path: &Path, kind: FailKind) {
+        self.failed += 1;
+        match kind {
+            FailKind::Denied => self.denied += 1,
+            FailKind::Locked => self.locked += 1,
+            FailKind::ReadOnly => self.readonly += 1,
+            FailKind::Other => self.other += 1,
+        }
+        if self.details.len() < MAX_FAILURE_DETAILS {
+            self.details.push((path.to_path_buf(), kind));
+        }
+    }
+
+    /// 无具体路径的失败（如清空回收站整体失败）。
+    fn record_count(&mut self, kind: FailKind) {
+        self.failed += 1;
+        match kind {
+            FailKind::Denied => self.denied += 1,
+            FailKind::Locked => self.locked += 1,
+            FailKind::ReadOnly => self.readonly += 1,
+            FailKind::Other => self.other += 1,
+        }
+    }
+}
+
+/// 删除前清除文件的只读属性。Windows 上只读属性会使 `fs::remove_file` 返回
+/// PermissionDenied（删除文件只需目录写权限，只读位会阻止），清位是标准做法。
+/// 返回 true 表示该文件原本带只读属性（无论清除是否成功）。
+/// 取舍：清只读后若删除失败（如并发占用），不恢复只读位——垃圾文件保留可删状态
+/// 更利于重试清理，且清理目标本就是删除，恢复逻辑不值得复杂化。
+pub fn clear_readonly(path: &Path) -> bool {
+    let Ok(md) = fs::symlink_metadata(path) else {
+        return false;
+    };
+    if !md.permissions().readonly() {
+        return false;
+    }
+    let mut perms = md.permissions();
+    perms.set_readonly(false);
+    let _ = fs::set_permissions(path, perms);
+    true
+}
+
+pub fn delete_contents(root: &Path, stats: &mut DeleteStats) {
+    let entries = match fs::read_dir(root) {
+        Ok(e) => e,
+        Err(err) => {
+            // 根目录不存在：无内容可清理，不算失败；其他错误（权限/占用）如实记一条
+            if err.kind() != std::io::ErrorKind::NotFound {
+                stats.record(root, classify_delete_error(&err, false));
+            }
+            return;
+        }
     };
     for entry in entries.flatten() {
         let path = entry.path();
         let Ok(md) = fs::symlink_metadata(&path) else {
-            failed += 1;
+            stats.record(&path, FailKind::Other);
             continue;
         };
         if is_reparse(&md) {
             continue;
         }
         if md.is_dir() {
-            let (f, e) = delete_contents(&path);
-            freed += f;
-            failed += e;
-            if fs::remove_dir(&path).is_err() {
-                failed += 1;
+            delete_contents(&path, stats);
+            if let Err(e) = fs::remove_dir(&path) {
+                if e.kind() != std::io::ErrorKind::NotFound {
+                    stats.record(&path, classify_delete_error(&e, false));
+                }
             }
         } else {
             let len = md.len();
-            if fs::remove_file(&path).is_ok() {
-                freed += len;
-            } else {
-                failed += 1;
+            let was_readonly = md.permissions().readonly();
+            if was_readonly {
+                clear_readonly(&path);
+            }
+            match fs::remove_file(&path) {
+                Ok(()) => stats.freed += len,
+                Err(e) => {
+                    // TOCTOU：symlink_metadata 与 remove_file 之间文件被第三方删除
+                    // （ERROR_FILE_NOT_FOUND）= 目标已达成，豁免不计失败（与根目录/remove_dir 口径一致）
+                    if e.raw_os_error() != Some(2) {
+                        stats.record(&path, classify_delete_error(&e, was_readonly));
+                    }
+                }
             }
         }
     }
-    (freed, failed)
 }
 
 pub fn app_data_dir() -> PathBuf {
@@ -278,6 +375,70 @@ pub fn exe_path(command: &str) -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn classify_delete_error_mapping() {
+        // 5=ACCESS_DENIED → 无权限；32/33=sharing/lock violation → 被占用
+        let e5 = std::io::Error::from_raw_os_error(5);
+        let e32 = std::io::Error::from_raw_os_error(32);
+        let e33 = std::io::Error::from_raw_os_error(33);
+        let e2 = std::io::Error::from_raw_os_error(2);
+        assert_eq!(classify_delete_error(&e5, false), FailKind::Denied);
+        assert_eq!(classify_delete_error(&e32, false), FailKind::Locked);
+        assert_eq!(classify_delete_error(&e33, false), FailKind::Locked);
+        assert_eq!(classify_delete_error(&e2, false), FailKind::Other);
+        // 只读属性优先归类（便于针对性提示「只读」而非笼统「无权限」）
+        assert_eq!(classify_delete_error(&e5, true), FailKind::ReadOnly);
+        assert_eq!(classify_delete_error(&e32, true), FailKind::ReadOnly);
+        // 无 OS 错误码的自造错误归为 Other
+        let custom = std::io::Error::new(std::io::ErrorKind::Other, "custom");
+        assert_eq!(classify_delete_error(&custom, false), FailKind::Other);
+    }
+
+    #[test]
+    fn delete_stats_details_capped_at_20() {
+        // 计数完整累计，明细只留前 20 条
+        let mut stats = DeleteStats::default();
+        for i in 0..30 {
+            stats.record(&PathBuf::from(format!("p{i}")), FailKind::Locked);
+        }
+        assert_eq!(stats.failed, 30);
+        assert_eq!(stats.locked, 30);
+        assert_eq!(stats.details.len(), MAX_FAILURE_DETAILS);
+        assert_eq!(stats.details[0].0, PathBuf::from("p0"));
+        assert_eq!(stats.details[19].0, PathBuf::from("p19"));
+    }
+
+    #[test]
+    fn delete_contents_clears_readonly() {
+        // 真实构造只读文件：清除属性后直删应成功（修复前 failed=1 PermissionDenied）
+        let d = std::env::temp_dir().join(format!("mwcleaner_ro_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&d);
+        fs::create_dir_all(&d).unwrap();
+        let f = d.join("ro.txt");
+        fs::write(&f, b"data").unwrap();
+        let mut perms = fs::metadata(&f).unwrap().permissions();
+        perms.set_readonly(true);
+        fs::set_permissions(&f, perms).unwrap();
+        assert!(fs::metadata(&f).unwrap().permissions().readonly());
+        let mut stats = DeleteStats::default();
+        delete_contents(&d, &mut stats);
+        assert_eq!(stats.failed, 0, "只读文件清属性后应可删除");
+        assert_eq!(stats.freed, 4);
+        assert!(!f.exists());
+        assert!(stats.details.is_empty());
+        let _ = fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn delete_contents_missing_root_not_counted() {
+        // 根目录不存在：无内容可清理，不算失败（与旧行为一致）
+        let missing = std::env::temp_dir().join(format!("mwcleaner_missing_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&missing);
+        let mut stats = DeleteStats::default();
+        delete_contents(&missing, &mut stats);
+        assert_eq!(stats.failed, 0);
+    }
 
     #[test]
     fn csv_escape_formula_injection() {

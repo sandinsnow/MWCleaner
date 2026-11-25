@@ -10,7 +10,11 @@ use windows::Win32::UI::Shell::{
     SHERB_NOCONFIRMATION, SHERB_NOPROGRESSUI, SHERB_NOSOUND,
 };
 
-use super::{delete_contents, dir_size, dir_size_cancelled, is_reparse};
+pub use super::FailKind;
+use super::{
+    classify_delete_error, clear_readonly, delete_contents, dir_size, dir_size_cancelled,
+    is_reparse, DeleteStats,
+};
 
 #[derive(Clone)]
 pub struct JunkCategory {
@@ -32,6 +36,33 @@ pub struct CleanResult {
     pub recycled_bytes: u64,
     pub failed: u64,
     pub cancelled: bool,
+    /// 失败分类计数（ReadOnly 并入 Denied 口径，只读本质是权限类失败）
+    pub fail_denied: u64,
+    pub fail_locked: u64,
+    pub fail_other: u64,
+    /// 失败明细（路径 + 分类），只保留前 MAX_FAILURE_DETAILS 条
+    pub failures: Vec<(PathBuf, FailKind)>,
+}
+
+/// 按失败构成生成针对性指引文案；无失败返回 None。纯函数便于单测。
+pub fn failure_hint(denied: u64, locked: u64, other: u64) -> Option<String> {
+    let mut parts: Vec<String> = Vec::new();
+    if locked > 0 {
+        parts.push(format!(
+            "{locked} 项被其他程序占用（Windows 更新缓存/传递优化通常由对应服务锁定，可在「服务优化」页暂停 wuauserv/DoSvc 后重试）"
+        ));
+    }
+    if denied > 0 {
+        parts.push(format!("{denied} 项需要更高权限（系统保护文件，建议保留）"));
+    }
+    if other > 0 {
+        parts.push(format!("{other} 项因其他原因未清理"));
+    }
+    if parts.is_empty() {
+        None
+    } else {
+        Some(parts.join("；"))
+    }
 }
 
 /// COR-3：回收站操作结果——用 `fAnyOperationsAborted` 区分用户取消与权限/占用失败。
@@ -381,9 +412,16 @@ fn entry_size(p: &Path) -> u64 {
     }
 }
 
-fn clean_dir_recycle(root: &Path, owner_hwnd: isize) -> (u64, u64, bool) {
-    let Ok(entries) = fs::read_dir(root) else {
-        return (0, 1, false);
+fn clean_dir_recycle(root: &Path, owner_hwnd: isize, stats: &mut DeleteStats) -> (u64, bool) {
+    let entries = match fs::read_dir(root) {
+        Ok(e) => e,
+        Err(err) => {
+            // 根目录不存在：无内容可清理，不算失败
+            if err.kind() != std::io::ErrorKind::NotFound {
+                stats.record(root, classify_delete_error(&err, false));
+            }
+            return (0, false);
+        }
     };
     let items: Vec<(PathBuf, u64)> = entries
         .flatten()
@@ -395,24 +433,24 @@ fn clean_dir_recycle(root: &Path, owner_hwnd: isize) -> (u64, u64, bool) {
         })
         .collect();
     if items.is_empty() {
-        return (0, 0, false);
+        return (0, false);
     }
     let paths: Vec<PathBuf> = items.iter().map(|(p, _)| p.clone()).collect();
     let outcome = unsafe { recycle_paths_owner(owner_hwnd, &paths) };
     let cancelled = outcome == RecycleOutcome::Cancelled;
     let mut freed = 0u64;
-    let mut failed = 0u64;
     for (p, size) in &items {
         if p.exists() {
             // 用户取消不算失败：文件按预期保留在磁盘
+            // Shell 整体拒绝时无法逐文件归因，如实记为 Other
             if !cancelled {
-                failed += 1;
+                stats.record(p, FailKind::Other);
             }
         } else {
             freed += size;
         }
     }
-    (freed, failed, cancelled)
+    (freed, cancelled)
 }
 
 pub fn clean(
@@ -424,8 +462,7 @@ pub fn clean(
 ) -> CleanResult {
     let selected: Vec<_> = cats.iter().filter(|c| c.selected).collect();
     let total = selected.len();
-    let mut freed = 0u64;
-    let mut failed = 0u64;
+    let mut stats = DeleteStats::default();
     let mut recycled_bytes = 0u64;
     let mut shell_cancelled = false;
     for (i, cat) in selected.iter().enumerate() {
@@ -443,11 +480,11 @@ pub fn clean(
                 )
             };
             if result.is_ok() {
-                freed += before;
+                stats.freed += before;
             } else if result.unwrap_err().code() == E_ABORT {
                 shell_cancelled = true;
             } else {
-                failed += 1;
+                stats.record_count(FailKind::Other);
             }
             continue;
         }
@@ -466,36 +503,53 @@ pub fn clean(
                         // 移入回收站：空间清空回收站后才释放
                         recycled_bytes += len;
                     } else {
-                        failed += 1;
+                        // Shell 整体拒绝，无法逐文件归因，如实记为 Other
+                        stats.record(root, FailKind::Other);
                     }
-                } else if fs::remove_file(root).is_ok() {
-                    freed += len;
                 } else {
-                    failed += 1;
+                    // 只读属性会令 remove_file 返回 PermissionDenied：删前清只读位
+                    let was_readonly = clear_readonly(root);
+                    match fs::remove_file(root) {
+                        Ok(()) => stats.freed += len,
+                        Err(e) => {
+                            // TOCTOU：文件被第三方删除（NotFound）= 目标已达成，豁免不计失败
+                            if e.raw_os_error() != Some(2) {
+                                stats.record(root, classify_delete_error(&e, was_readonly));
+                            }
+                        }
+                    }
                 }
             } else if cat.upgrade_remnant {
                 // C6：升级残留强制直删（设置页回收站开关对此类别无效），清空后移除根目录。
                 // 根壳移除后下次扫描该类别自动消失；失败项照常计入 failed，不静默。
-                let (f, e) = delete_contents(root);
-                freed += f;
-                failed += e;
-                let _ = fs::remove_dir(root);
+                delete_contents(root, &mut stats);
+                if let Err(e) = fs::remove_dir(root) {
+                    if e.kind() != std::io::ErrorKind::NotFound {
+                        stats.record(root, classify_delete_error(&e, false));
+                    }
+                }
             } else if to_recycle {
-                let (f, e, cancelled) = clean_dir_recycle(root, owner_hwnd);
+                let (f, cancelled) = clean_dir_recycle(root, owner_hwnd, &mut stats);
                 // 移入回收站：体积计入 recycled_bytes，与真正释放的 freed 区分口径
                 recycled_bytes += f;
-                failed += e;
                 shell_cancelled |= cancelled;
             } else {
-                let (f, e) = delete_contents(root);
-                freed += f;
-                failed += e;
+                delete_contents(root, &mut stats);
             }
         }
     }
     let cancelled = cancel.load(Ordering::Relaxed) || shell_cancelled;
     progress(total, total, if cancelled { "已取消" } else { "完成" });
-    CleanResult { freed, recycled_bytes, failed, cancelled }
+    CleanResult {
+        freed: stats.freed,
+        recycled_bytes,
+        failed: stats.failed,
+        cancelled,
+        fail_denied: stats.denied + stats.readonly,
+        fail_locked: stats.locked,
+        fail_other: stats.other,
+        failures: stats.details,
+    }
 }
 
 #[cfg(test)]
@@ -630,5 +684,64 @@ mod tests {
                 assert!(root.is_dir(), "探测清单只应包含真实存在的目录");
             }
         }
+    }
+
+    #[test]
+    fn readonly_file_direct_delete() {
+        // 真实构造只读文件：直删前清只读位，清理应成功（用户报告的主因场景）
+        let d = test_dir("ro_direct");
+        let f = d.join("ro.txt");
+        fs::write(&f, b"x").unwrap();
+        let mut perms = fs::metadata(&f).unwrap().permissions();
+        perms.set_readonly(true);
+        fs::set_permissions(&f, perms).unwrap();
+        let r = clean(&[cat(d.clone())], &|_, _, _| {}, false, &AtomicBool::new(false), 0);
+        assert_eq!(r.failed, 0, "只读文件清除属性后直删应成功");
+        assert_eq!(r.fail_denied, 0);
+        assert!(!f.exists());
+        let _ = fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn clean_classifies_locked_file() {
+        // 以 share_mode=1（仅 FILE_SHARE_READ，无 WRITE/DELETE）打开文件真实构造占用，
+        // remove_file 应返回 ERROR_SHARING_VIOLATION(32) 并被归类为 Locked
+        use std::os::windows::fs::OpenOptionsExt;
+        let d = test_dir("lockcls");
+        let f = d.join("locked.bin");
+        fs::write(&f, vec![1u8; 100]).unwrap();
+        let lock = std::fs::OpenOptions::new()
+            .read(true)
+            .share_mode(1)
+            .open(&f)
+            .unwrap();
+        let r = clean(&[cat(d.clone())], &|_, _, _| {}, false, &AtomicBool::new(false), 0);
+        assert_eq!(r.failed, 1);
+        assert_eq!(r.fail_locked, 1);
+        assert_eq!(r.fail_denied, 0);
+        assert!(r.failures.iter().any(|(p, k)| p == &f && *k == FailKind::Locked));
+        drop(lock);
+        let _ = fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn failure_hint_composition() {
+        assert_eq!(failure_hint(0, 0, 0), None);
+        // 纯占用：给服务暂停指引
+        let locked_only = failure_hint(0, 3, 0).unwrap();
+        assert!(locked_only.contains("3 项被其他程序占用"));
+        assert!(locked_only.contains("wuauserv"));
+        assert!(locked_only.contains("DoSvc"));
+        // 纯无权限：建议保留
+        let denied_only = failure_hint(2, 0, 0).unwrap();
+        assert!(denied_only.contains("2 项需要更高权限"));
+        assert!(denied_only.contains("建议保留"));
+        // 混合：并列且占用在前（最常见、最可行动）
+        let mixed = failure_hint(1, 2, 1).unwrap();
+        assert!(mixed.contains("被其他程序占用") && mixed.contains("更高权限"));
+        assert!(mixed.contains("其他原因"));
+        let idx_locked = mixed.find("被其他程序占用").unwrap();
+        let idx_denied = mixed.find("更高权限").unwrap();
+        assert!(idx_locked < idx_denied);
     }
 }
